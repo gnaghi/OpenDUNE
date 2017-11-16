@@ -1,5 +1,8 @@
 /** @file src/file.c %File access routines. */
 
+#ifdef OSX
+#include <CoreFoundation/CoreFoundation.h>
+#endif /* OSX */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,10 +25,12 @@
 /* #define DUNE_DATA_DIR "/usr/local/share/opendune" */
 
 #ifndef DUNE_DATA_DIR
-#define DUNE_DATA_DIR "."
+#ifdef TOS
+#define DUNE_DATA_DIR "DATA"
+#else
+#define DUNE_DATA_DIR "./data"
 #endif
-
-#define DUNE2_DATA_PREFIX       "data/"
+#endif
 
 static char g_dune_data_dir[1024] = DUNE_DATA_DIR;
 static char g_personal_data_dir[1024] = ".";
@@ -95,12 +100,21 @@ File_MakeCompleteFilename(char *buf, size_t len, enum SearchDirectory dir, const
 	int j;
 	int i = 0;
 
+#ifdef TOS
 	if (dir == SEARCHDIR_GLOBAL_DATA_DIR || dir == SEARCHDIR_CAMPAIGN_DIR) {
 		/* Note: campaign specific data directory not implemented. */
-		i = snprintf(buf, len, "%s/%s%s", g_dune_data_dir, DUNE2_DATA_PREFIX, filename);
+		i = snprintf(buf, len, "%s\\%s", g_dune_data_dir, filename);
+	} else if (dir == SEARCHDIR_PERSONAL_DATA_DIR) {
+		i = snprintf(buf, len, "%s\\%s", g_personal_data_dir, filename);
+	}
+#else
+	if (dir == SEARCHDIR_GLOBAL_DATA_DIR || dir == SEARCHDIR_CAMPAIGN_DIR) {
+		/* Note: campaign specific data directory not implemented. */
+		i = snprintf(buf, len, "%s/%s", g_dune_data_dir, filename);
 	} else if (dir == SEARCHDIR_PERSONAL_DATA_DIR) {
 		i = snprintf(buf, len, "%s/%s", g_personal_data_dir, filename);
 	}
+#endif
 	buf[len - 1] = '\0';
 
 	if (i > (int)len) {
@@ -236,7 +250,39 @@ static uint8 _File_Open(enum SearchDirectory dir, const char *filename, uint8 mo
 	for (fileIndex = 0; fileIndex < FILE_MAX; fileIndex++) {
 		if (s_file[fileIndex].fp == NULL) break;
 	}
-	if (fileIndex == FILE_MAX) return FILE_INVALID;
+	if (fileIndex >= FILE_MAX) {
+		Warning("Limit of %d open files reached.\n", FILE_MAX);
+		return FILE_INVALID;
+	}
+
+	if(mode == FILE_MODE_READ && dir != SEARCHDIR_PERSONAL_DATA_DIR) {
+		/* Look in PAK only for READ only files, and not Personnal files */
+		fileInfo = FileInfo_Find_ByName(filename, &pakInfo);
+		if (fileInfo == NULL) return FILE_INVALID;
+		if (pakInfo == NULL) {
+			/* Check if we can find the file outside any PAK file */
+			s_file[fileIndex].fp = fopendatadir(dir, filename, "rb");
+			if (s_file[fileIndex].fp == NULL) return FILE_INVALID;
+
+			s_file[fileIndex].start    = 0;
+			s_file[fileIndex].position = 0;
+			fseek(s_file[fileIndex].fp, 0, SEEK_END);
+			s_file[fileIndex].size = ftell(s_file[fileIndex].fp);
+			fseek(s_file[fileIndex].fp, 0, SEEK_SET);
+		} else {
+			/* file is found in PAK */
+			s_file[fileIndex].fp = fopendatadir(dir, pakInfo->filename, "rb");
+			if (s_file[fileIndex].fp == NULL) return FILE_INVALID;
+
+			s_file[fileIndex].start    = fileInfo->filePosition;
+			s_file[fileIndex].position = 0;
+			s_file[fileIndex].size     = fileInfo->fileSize;
+
+			/* Go to the start of the file now */
+			fseek(s_file[fileIndex].fp, s_file[fileIndex].start, SEEK_SET);
+		}
+		return fileIndex;
+	}
 
 	/* Check if we can find the file outside any PAK file */
 	s_file[fileIndex].fp = fopendatadir(dir, filename, (mode == FILE_MODE_WRITE) ? "wb" : ((mode == FILE_MODE_READ_WRITE) ? "wb+" : "rb"));
@@ -254,31 +300,7 @@ static uint8 _File_Open(enum SearchDirectory dir, const char *filename, uint8 mo
 
 		return fileIndex;
 	}
-
-	/* We never allow writing of files inside PAKs */
-	if ((mode & FILE_MODE_WRITE) != 0) return FILE_INVALID;
-	/* Personnal files are not inside PAKs */
-	if (dir == SEARCHDIR_PERSONAL_DATA_DIR) return FILE_INVALID;
-
-	fileInfo = FileInfo_Find_ByName(filename, &pakInfo);
-
-	/* Check if the file could be inside any of our PAK files */
-	if (fileInfo == NULL) return FILE_INVALID;
-
-	/* If the file is not inside another PAK, then the file doesn't exist (as it wasn't in the directory either) */
-	if (!fileInfo->flags.inPAKFile) return FILE_INVALID;
-
-	if (pakInfo == NULL) return FILE_INVALID;
-	s_file[fileIndex].fp = fopendatadir(dir, pakInfo->filename, "rb");
-	if (s_file[fileIndex].fp == NULL) return FILE_INVALID;
-
-	s_file[fileIndex].start    = fileInfo->filePosition;
-	s_file[fileIndex].position = 0;
-	s_file[fileIndex].size     = fileInfo->fileSize;
-
-	/* Go to the start of the file now */
-	fseek(s_file[fileIndex].fp, s_file[fileIndex].start, SEEK_SET);
-	return fileIndex;
+	return FILE_INVALID;
 }
 
 /**
@@ -410,8 +432,10 @@ static bool _File_Init_Callback(const char *name, const char *path, uint32 size)
 	ext = strrchr(path, '.');
 	if (ext != NULL) {
 		if (strcasecmp(ext, ".pak") == 0) {
-			if (!_File_Init_ProcessPak(path, size, fileInfo))
+			if (!_File_Init_ProcessPak(path, size, fileInfo)) {
+				Warning("Failed to process PAK file %s\n", path);
 				return false;
+			}
 		}
 	}
 	return true;
@@ -473,6 +497,9 @@ bool File_Init(void)
 {
 	char buf[1024];
 	char *homedir = NULL;
+#ifdef OSX
+	CFBundleRef mainBundle = CFBundleGetMainBundle();
+#endif /* OSX */
 
 	if (IniFile_GetString("savedir", NULL, buf, sizeof(buf)) != NULL) {
 		/* savedir is defined in opendune.ini */
@@ -487,7 +514,10 @@ bool File_Init(void)
 			PathAppend(buf, TEXT("OpenDUNE"));
 			strncpy(g_personal_data_dir, buf, sizeof(g_personal_data_dir));
 		}
-#else /* _WIN32 */
+#elif defined(TOS)
+		(void)homedir;
+		strcpy(g_personal_data_dir, "SAVES");
+#else /* _WIN32 / TOS*/
 		/* ~/.config/opendune (Linux)  ~/Library/Application Support/OpenDUNE (Mac OS X) */
 		homedir = getenv("HOME");
 		if (homedir == NULL) {
@@ -507,6 +537,35 @@ bool File_Init(void)
 		return false;
 	}
 
+#ifdef OSX
+	/* get .app path */
+	if (mainBundle != NULL) {
+		CFURLRef bundleURL = CFBundleCopyBundleURL(mainBundle);
+		CFURLRef resourcesURL = CFBundleCopyResourcesDirectoryURL(mainBundle);
+		if (resourcesURL != NULL && bundleURL != NULL) {
+			size_t len;
+			CFStringRef bundleDir = CFURLCopyFileSystemPath(bundleURL, kCFURLPOSIXPathStyle);
+			CFStringRef resourcesDir = CFURLCopyFileSystemPath(resourcesURL, kCFURLPOSIXPathStyle);
+
+			CFStringGetFileSystemRepresentation(bundleDir, g_dune_data_dir, sizeof(g_dune_data_dir));
+			CFStringGetFileSystemRepresentation(resourcesDir, buf, sizeof(buf));
+			Debug("bundleDir=%s\nresourcesDir=%s\n", g_dune_data_dir, buf);
+			if (buf[0] != '/') {
+				/* append relative Resources directory */
+				len = strlen(g_dune_data_dir);
+				snprintf(g_dune_data_dir + len, sizeof(g_dune_data_dir) - len, "/%s/data", buf);
+			} else {
+				len = strlen(g_dune_data_dir);
+				snprintf(g_dune_data_dir + len, sizeof(g_dune_data_dir) - len, "/data");
+			}
+			Debug("datadir set to : %s\n", g_dune_data_dir);
+			CFRelease(resourcesDir);
+			CFRelease(resourcesURL);
+			CFRelease(bundleDir);
+			CFRelease(bundleURL);
+		}
+	}
+#endif /* OSX */
 	if (IniFile_GetString("datadir", NULL, buf, sizeof(buf)) != NULL) {
 		/* datadir is defined in opendune.ini */
 		strncpy(g_dune_data_dir, buf, sizeof(g_dune_data_dir));
@@ -542,25 +601,37 @@ void File_Uninit(void)
 /**
  * Check if a file exists either in a PAK or on the disk.
  *
+ * @param dir directory for this file
  * @param filename The filename to check for.
+ * @param fileSize Filled with the file size if the file exists
  * @return True if and only if the file can be found.
  */
-bool File_Exists_Ex(enum SearchDirectory dir, const char *filename)
+bool File_Exists_Ex(enum SearchDirectory dir, const char *filename, uint32 *fileSize)
 {
-	uint8 index;
+	bool exists = false;
 
 	g_fileOperation++;
 
-	index = _File_Open(dir, filename, FILE_MODE_READ);
-	if (index == FILE_INVALID) {
-		g_fileOperation--;
-		return false;
+	if(dir != SEARCHDIR_PERSONAL_DATA_DIR) {
+		FileInfo *fileInfo;
+		fileInfo = FileInfo_Find_ByName(filename, NULL);
+		if (fileInfo != NULL) {
+			exists = true;
+			if (fileSize != NULL) *fileSize = fileInfo->fileSize;
+		}
+	} else {
+		uint8 index;
+		index = _File_Open(dir, filename, FILE_MODE_READ);
+		if (index != FILE_INVALID) {
+			exists = true;
+			if (fileSize != NULL) *fileSize = File_GetSize(index);
+			File_Close(index);
+		}
 	}
-	File_Close(index);
 
 	g_fileOperation--;
 
-	return true;
+	return exists;
 }
 
 /**
@@ -579,8 +650,12 @@ uint8 File_Open_Ex(enum SearchDirectory dir, const char *filename, uint8 mode)
 	g_fileOperation--;
 
 	if (res == FILE_INVALID) {
-		Error("Unable to open file '%s'.\n", filename);
-		exit(1);
+		if(dir == SEARCHDIR_PERSONAL_DATA_DIR) {
+			Warning("Unable to open file '%s'.\n", filename);
+		} else {
+			Error("Unable to open file '%s'.\n", filename);
+			exit(1);
+		}
 	}
 
 	return res;
@@ -803,6 +878,7 @@ uint32 File_ReadBlockFile_Ex(enum SearchDirectory dir, const char *filename, voi
 	uint8 index;
 
 	index = File_Open_Ex(dir, filename, FILE_MODE_READ);
+	if (index == FILE_INVALID) return 0;
 	length = File_Read(index, buffer, length);
 	File_Close(index);
 	return length;
@@ -822,6 +898,7 @@ void *File_ReadWholeFile(const char *filename)
 	void *buffer;
 
 	index = File_Open(filename, FILE_MODE_READ);
+	if (index == FILE_INVALID) return NULL;
 	length = File_GetSize(index);
 
 	buffer = malloc(length + 1);
@@ -905,6 +982,8 @@ uint8 ChunkFile_Open_Ex(enum SearchDirectory dir, const char *filename)
 	uint32 header;
 
 	index = File_Open_Ex(dir, filename, FILE_MODE_READ);
+
+	if(index == FILE_INVALID) return index;
 
 	File_Read(index, &header, 4);
 

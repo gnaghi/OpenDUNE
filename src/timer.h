@@ -14,6 +14,8 @@ extern uint32 g_timerInput;
 extern uint32 g_timerSleep;
 extern uint32 g_timerTimeout;
 
+extern uint32 Timer_GetTime(void);
+
 extern void Timer_Sleep(uint16 ticks);
 extern bool Timer_SetTimer(TimerType timer, bool set);
 
@@ -22,8 +24,12 @@ extern void Timer_Uninit(void);
 
 extern void Timer_Tick(void);
 
-extern void Timer_Add(void (*callback)(void), uint32 usec_delay);
+extern void Timer_Add(void (*callback)(void), uint32 usec_delay, bool callonce);
 extern void Timer_Change(void (*callback)(void), uint32 usec_delay);
 extern void Timer_Remove(void (*callback)(void));
 
-#endif /* OPENDUNE_H */
+#if !defined(_WIN32) || defined(WITH_SDL) || defined(WITH_SDL2)
+extern void SleepAndProcessBackgroundTasks(void);
+#endif /* !_WIN32 || SDL || SDL2 */
+
+#endif /* TIMER_H */

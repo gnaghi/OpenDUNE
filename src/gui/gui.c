@@ -11,6 +11,7 @@
 #include "../os/sleep.h"
 #include "../os/strings.h"
 #include "../os/endian.h"
+#include "../os/error.h"
 
 #include "gui.h"
 
@@ -115,7 +116,7 @@ bool g_textDisplayNeedsUpdate;                              /*!< If set, text di
 uint32 g_strategicRegionBits;                               /*!< Region bits at the map. */
 static uint32 s_ticksPlayed;
 bool g_doQuitHOF;
-static uint8 s_var_81BA[24];
+static uint8 s_strategicMapArrowColors[24];
 static bool s_strategicMapFastForward;
 
 static uint16 s_mouseSpriteLeft;
@@ -284,7 +285,7 @@ void GUI_DisplayText(const char *str, int16 importance, ...)
 	}
 
 	if (scrollInProgress) {
-		uint16 oldValue_07AE_0000;
+		uint16 oldWidgetId;
 		uint16 height;
 
 		if (buffer[0] != '\0') {
@@ -295,7 +296,7 @@ void GUI_DisplayText(const char *str, int16 importance, ...)
 		}
 		if (displayTimer > g_timerGUI) return;
 
-		oldValue_07AE_0000 = Widget_SetCurrentWidget(7);
+		oldWidgetId = Widget_SetCurrentWidget(7);
 
 		if (g_textDisplayNeedsUpdate) {
 			Screen oldScreenID = GFX_Screen_SetActive(SCREEN_1);
@@ -321,7 +322,7 @@ void GUI_DisplayText(const char *str, int16 importance, ...)
 		GUI_Screen_Copy(g_curWidgetXBase, textOffset, g_curWidgetXBase, g_curWidgetYBase, g_curWidgetWidth, height, SCREEN_1, SCREEN_0);
 		GUI_Mouse_Show_InWidget();
 
-		Widget_SetCurrentWidget(oldValue_07AE_0000);
+		Widget_SetCurrentWidget(oldWidgetId);
 
 		if (textOffset != 0) {
 			if (line3Importance <= line2Importance) {
@@ -448,12 +449,12 @@ static void GUI_DrawChar(unsigned char c, uint16 x, uint16 y)
  * @param fgColour The foreground colour of the text.
  * @param bgColour The background colour of the text.
  */
-void GUI_DrawText(char *string, int16 left, int16 top, uint8 fgColour, uint8 bgColour)
+void GUI_DrawText(const char *string, int16 left, int16 top, uint8 fgColour, uint8 bgColour)
 {
 	uint8 colours[2];
 	uint16 x;
 	uint16 y;
-	char *s;
+	const char *s;
 
 	if (g_fontCurrent == NULL) return;
 
@@ -504,15 +505,25 @@ void GUI_DrawText(char *string, int16 left, int16 top, uint8 fgColour, uint8 bgC
  * @param fgColour The foreground colour of the text.
  * @param bgColour The background colour of the text.
  * @param flags The flags of the string.
+ *
+ * flags :
+ * 0x0001 : font 6p
+ * 0x0002 : font 8p
+ * 0x0010 : style ?
+ * 0x0020 : style ?
+ * 0x0030 : style ?
+ * 0x0040 : style ?
+ * 0x0100 : align center
+ * 0x0200 : align right
  */
 void GUI_DrawText_Wrapper(const char *string, int16 left, int16 top, uint8 fgColour, uint8 bgColour, uint16 flags, ...)
 {
-	static char textBuffer[240];
+	char textBuffer[240];
 	static uint16 displayedarg12low = -1;
 	static uint16 displayedarg2mid  = -1;
 
-	uint8 arg12low = flags & 0xF;
-	uint8 arg2mid  = flags & 0xF0;
+	uint8 arg12low = flags & 0x0F;	/* font : 1 => 6p, 2 => 8p */
+	uint8 arg2mid  = flags & 0xF0;	/* style */
 
 	if ((arg12low != displayedarg12low && arg12low != 0) || string == NULL) {
 		switch (arg12low) {
@@ -565,14 +576,11 @@ void GUI_DrawText_Wrapper(const char *string, int16 left, int16 top, uint8 fgCol
 
 	if (string == NULL) return;
 
-	if (string != textBuffer) {
-		char buf[256];
+	{
 		va_list ap;
 
-		strncpy(buf, string, sizeof(buf));
-
 		va_start(ap, flags);
-		vsnprintf(textBuffer, sizeof(textBuffer), buf, ap);
+		vsnprintf(textBuffer, sizeof(textBuffer), string, ap);
 		va_end(ap);
 	}
 
@@ -590,13 +598,16 @@ void GUI_DrawText_Wrapper(const char *string, int16 left, int16 top, uint8 fgCol
 }
 
 /**
- * Do something on the given colour in the given palette.
+ * Shift the given colour toward the reference color.
+ * Increment(or decrement) each component (R, G, B) until
+ * they equal thoses of the reference color.
  *
  * @param palette The palette to work on.
  * @param colour The colour to modify.
  * @param reference The colour to use as reference.
+ * @return true if the colour now equals the reference.
  */
-static bool GUI_Palette_2BA5_00A2(uint8 *palette, uint16 colour, uint16 reference)
+static bool GUI_Palette_ShiftColour(uint8 *palette, uint16 colour, uint16 reference)
 {
 	bool ret = false;
 	uint16 i;
@@ -624,29 +635,33 @@ void GUI_PaletteAnimate(void)
 	static uint32 timerAnimation = 0;
 	static uint32 timerSelection = 0;
 	static uint32 timerToggle = 0;
+	bool shouldSetPalette = false;
 
 	if (timerAnimation < g_timerGUI) {
+		/* make the repair button flash */
 		static bool animationToggle = false;
 
 		uint16 colour;
 
 		colour = (!g_structureHighHealth && animationToggle) ? 6 : 15;
-		memcpy(g_palette1 + 3 * 239, g_palette1 + 3 * colour, 3);
-
-		GFX_SetPalette(g_palette1);
+		if (memcmp(g_palette1 + 3 * 239, g_palette1 + 3 * colour, 3) != 0) {
+			memcpy(g_palette1 + 3 * 239, g_palette1 + 3 * colour, 3);
+			shouldSetPalette = true;
+		}
 
 		animationToggle = !animationToggle;
 		timerAnimation = g_timerGUI + 60;
 	}
 
 	if (timerSelection < g_timerGUI && g_selectionType != SELECTIONTYPE_MENTAT) {
+		/* selection color */
 		static uint16 selectionStateColour = 15;
 
-		GUI_Palette_2BA5_00A2(g_palette1, 255, selectionStateColour);
-		GUI_Palette_2BA5_00A2(g_palette1, 255, selectionStateColour);
-		GUI_Palette_2BA5_00A2(g_palette1, 255, selectionStateColour);
+		GUI_Palette_ShiftColour(g_palette1, 255, selectionStateColour);
+		GUI_Palette_ShiftColour(g_palette1, 255, selectionStateColour);
+		GUI_Palette_ShiftColour(g_palette1, 255, selectionStateColour);
 
-		if (!GUI_Palette_2BA5_00A2(g_palette1, 255, selectionStateColour)) {
+		if (!GUI_Palette_ShiftColour(g_palette1, 255, selectionStateColour)) {
 			if (selectionStateColour == 13) {
 				selectionStateColour = 15;
 
@@ -662,24 +677,27 @@ void GUI_PaletteAnimate(void)
 			}
 		}
 
-		GFX_SetPalette(g_palette1);
+		shouldSetPalette = true;
 
 		timerSelection = g_timerGUI + 3;
 	}
 
 	if (timerToggle < g_timerGUI) {
+		/* windtrap color */
 		static uint16 toggleColour = 12;
 
-		GUI_Palette_2BA5_00A2(g_palette1, 223, toggleColour);
+		GUI_Palette_ShiftColour(g_palette1, 223, toggleColour);
 
-		if (!GUI_Palette_2BA5_00A2(g_palette1, 223, toggleColour)) {
+		if (!GUI_Palette_ShiftColour(g_palette1, 223, toggleColour)) {
 			toggleColour = (toggleColour == 12) ? 10 : 12;
 		}
 
-		GFX_SetPalette(g_palette1);
+		shouldSetPalette = true;
 
 		timerToggle = g_timerGUI + 5;
 	}
+
+	if (shouldSetPalette) GFX_SetPalette(g_palette1);
 
 	Sound_StartSpeech();
 }
@@ -753,7 +771,7 @@ uint16 GUI_DisplayModalMessage(const char *str, uint16 spriteID, ...)
 	static char textBuffer[768];
 
 	va_list ap;
-	uint16 oldValue_07AE_0000;
+	uint16 oldWidgetId;
 	uint16 ret;
 	Screen oldScreenID;
 	uint8 *screenBackup = NULL;
@@ -768,7 +786,7 @@ uint16 GUI_DisplayModalMessage(const char *str, uint16 spriteID, ...)
 
 	GUI_DrawText_Wrapper(NULL, 0, 0, 0, 0, 0x22);
 
-	oldValue_07AE_0000 = Widget_SetCurrentWidget(1);
+	oldWidgetId = Widget_SetCurrentWidget(1);
 
 	g_widgetProperties[1].height = g_fontCurrent->height * max(GUI_SplitText(textBuffer, ((g_curWidgetWidth - ((spriteID == 0xFFFF) ? 2 : 7)) << 3) - 6, '\r'), 3) + 18;
 
@@ -783,7 +801,7 @@ uint16 GUI_DisplayModalMessage(const char *str, uint16 spriteID, ...)
 	GUI_Widget_DrawBorder(1, 1, 1);
 
 	if (spriteID != 0xFFFF) {
-		GUI_DrawSprite(g_screenActiveID, g_sprites[spriteID], 7, 8, 1, 0x4000);
+		GUI_DrawSprite(SCREEN_ACTIVE, g_sprites[spriteID], 7, 8, 1, 0x4000);
 		GUI_Widget_SetProperties(1, g_curWidgetXBase + 5, g_curWidgetYBase + 8, g_curWidgetWidth - 7, g_curWidgetHeight - 16);
 	} else {
 		GUI_Widget_SetProperties(1, g_curWidgetXBase + 1, g_curWidgetYBase + 8, g_curWidgetWidth - 2, g_curWidgetHeight - 16);
@@ -824,7 +842,7 @@ uint16 GUI_DisplayModalMessage(const char *str, uint16 spriteID, ...)
 		GFX_CopyFromBuffer(g_curWidgetXBase * 8, g_curWidgetYBase, g_curWidgetWidth * 8, g_curWidgetHeight, screenBackup);
 	}
 
-	Widget_SetCurrentWidget(oldValue_07AE_0000);
+	Widget_SetCurrentWidget(oldWidgetId);
 
 	if (screenBackup != NULL) {
 		free(screenBackup);
@@ -873,13 +891,35 @@ uint16 GUI_SplitText(char *str, uint16 maxwidth, char delimiter)
  * Draws a sprite.
  * @param screenID On which screen to draw the sprite.
  * @param sprite The sprite to draw.
- * @param posX ??.
- * @param posY ??.
+ * @param posX position where to draw sprite.
+ * @param posY position where to draw sprite.
  * @param windowID The ID of the window where the drawing is done.
  * @param flags The flags.
  * @param ... The extra args, flags dependant.
+ *
+ * flags :
+ * 0x0002 reverse Y ? (void)
+ * 0x0004 zoom ? (int zoom_factor_x, int zoomRatioY) UNUSED ?
+ * 0x0100 Remap (uint8* remap, int remapCount)
+ * 0x0200 blur - SandWorm effect (void)
+ * 0x0400 sprite has house colors (set internally, no need to be set by caller)
+ * 0x1000 ? (int)
+ * 0x2000 house colors argument (uint8 houseColors[16])
+ * 0x4000 ? (void)
+ * 0x8000 position posX,posY is relative to center of sprite
+ * TODO : add #define's
+ *
+ * sprite data format :
+ * 00: 2 bytes = flags 0x01 = has House colors, 0x02 = Format80 encoded
+ * 02: 1 byte  = height
+ * 03: 2 bytes = width
+ * 05: 1 byte  = height - duplicated (ignored)
+ * 06: 2 bytes = sprite data length, including header (ignored)
+ * 08: 2 bytes = decoded data length
+ * 0A: [16 bytes] = house colors (if flags & 0x01)
+ * [1]A: xx bytes = data (row or Format80 encoded if flags & 0x02)
  */
-void GUI_DrawSprite(Screen screenID, uint8 *sprite, int16 posX, int16 posY, uint16 windowID, uint16 flags, ...)
+void GUI_DrawSprite(Screen screenID, const uint8 *sprite, int16 posX, int16 posY, uint16 windowID, uint16 flags, ...)
 {
 	static const uint16 s_variable_60[8] = {1, 3, 2, 5, 4, 3, 2, 1};
 	static uint16 s_variable_5E     = 0;
@@ -892,26 +932,24 @@ void GUI_DrawSprite(Screen screenID, uint8 *sprite, int16 posX, int16 posY, uint
 	int16  top;
 	int16  bottom;
 	uint16 width;
-	uint16 loc10;
-	int16  loc12;
-	int16  loc14;
-	int16  loc16;
-	int16  loc1A;
-	int16  loc1C;
-	int16  loc1E;
-	int16  loc20;
-	uint16 loc22;
+	uint16 spriteFlags;
+	int16  spriteHeight;	/* number of sprite rows to draw */
+	int16  tmpRowCountToDraw;
+	int16  pixelCountPerRow;	/* count of pixel to draw per row */
+	int16  spriteWidthZoomed;	/* spriteWidth * zoomRatioX */
+	int16  spriteWidth;	/* original sprite Width */
+	int16  pixelSkipStart;	/* pixel count to skip at start of row */
+	int16  pixelSkipEnd;	/* pixel count to skip at end of row */
 	uint8 *remap = NULL;
 	int16  remapCount = 0;
-	int16  loc2A;
-	uint16 loc30 = 0;
-	uint16 loc32;
-	uint16 loc34;
-	uint8 *loc38 = NULL;
-	int16  loc3A;
-	uint8 *loc3E = NULL;
-	uint16 loc44;
-	uint16 locbx;
+	int16  distY;
+	uint16 zoomRatioX = 0;	/* 8.8 fixed point, ie 0x0100 = 1x */
+	uint16 zoomRatioY = 0x100;	/* 8.8 fixed point, ie 0x0100 = 1x */
+	uint16 Ycounter = 0;	/* 8.8 fixed point, ie 0x0100 = 1 */
+	const uint8 *spriteSave = NULL;
+	int16  distX;
+	const uint8 *houseColors = NULL;
+	uint16 spriteDecodedLength; /* if encoded with Format80 */
 
 	uint8 *buf = NULL;
 	uint8 *b = NULL;
@@ -919,11 +957,9 @@ void GUI_DrawSprite(Screen screenID, uint8 *sprite, int16 posX, int16 posY, uint
 
 	if (sprite == NULL) return;
 
-	if ((*sprite & 0x1) != 0) flags |= 0x400;
-
 	va_start(ap, flags);
 
-	if ((flags & 0x2000) != 0) loc3E = va_arg(ap, uint8*);
+	if ((flags & 0x2000) != 0) houseColors = va_arg(ap, uint8*);
 
 	/* Remap */
 	if ((flags & 0x100) != 0) {
@@ -942,89 +978,89 @@ void GUI_DrawSprite(Screen screenID, uint8 *sprite, int16 posX, int16 posY, uint
 	if ((flags & 0x1000) != 0) s_variable_72 = (uint16)va_arg(ap, int);
 
 	if ((flags & 0x4) != 0) {
-		loc30 = (uint16)va_arg(ap, int);
-		loc32 = (uint16)va_arg(ap, int);
-	} else {
-		loc32 = 0x100;
+		zoomRatioX = (uint16)va_arg(ap, int);
+		zoomRatioY = (uint16)va_arg(ap, int);
 	}
 
 	va_end(ap);
 
-	loc34 = 0;
-
 	buf = GFX_Screen_Get_ByIndex(screenID);
 	buf += g_widgetProperties[windowID].xBase << 3;
 
-	if ((flags & 0x4000) == 0) posX -= g_widgetProperties[windowID].xBase << 3;
-
 	width = g_widgetProperties[windowID].width << 3;
 	top = g_widgetProperties[windowID].yBase;
+	bottom = top + g_widgetProperties[windowID].height;
 
-	if ((flags & 0x4000) != 0) posY += g_widgetProperties[windowID].yBase;
-
-	bottom = g_widgetProperties[windowID].yBase + g_widgetProperties[windowID].height;
-
-	loc10 = READ_LE_UINT16(sprite);
-	sprite += 2;
-
-	loc12 = *sprite++;
-
-	if ((flags & 0x4) != 0) {
-		loc12 *= loc32;
-		loc12 >>= 8;
-		if (loc12 == 0) return;
+	if ((flags & 0x4000) != 0) {
+		posY += g_widgetProperties[windowID].yBase;
+	} else {
+		posX -= g_widgetProperties[windowID].xBase << 3;
 	}
 
-	if ((flags & 0x8000) != 0) posY -= loc12 / 2;
-
-	loc1A = READ_LE_UINT16(sprite);
+	spriteFlags = READ_LE_UINT16(sprite);
 	sprite += 2;
 
-	loc14 = loc1A;
+	if ((spriteFlags & 0x1) != 0) flags |= 0x400;
+
+	spriteHeight = *sprite++;
 
 	if ((flags & 0x4) != 0) {
-		loc14 += loc30;
-		loc14 >>= 8;
-		if (loc14 == 0) return;
+		spriteHeight = (int16)(((int32)spriteHeight * (int32)zoomRatioY) >> 8);
+		if (spriteHeight == 0) return;
 	}
 
-	if ((flags & 0x8000) != 0) posX -= loc14 / 2;
+	if ((flags & 0x8000) != 0) posY -= spriteHeight / 2;	/* posY relative to center */
 
-	loc16 = loc14;
+	spriteWidth = READ_LE_UINT16(sprite);
+	sprite += 2;
+
+	spriteWidthZoomed = spriteWidth;
+
+	if ((flags & 0x4) != 0) {
+		spriteWidthZoomed = (int16)(((int32)spriteWidthZoomed * (int32)zoomRatioX) >> 8);
+		if (spriteWidthZoomed == 0) return;
+	}
+
+	if ((flags & 0x8000) != 0) posX -= spriteWidthZoomed / 2;	/* posX relative to center */
+
+	pixelCountPerRow = spriteWidthZoomed;
 
 	sprite += 3;
 
-	locbx = READ_LE_UINT16(sprite);
+	spriteDecodedLength = READ_LE_UINT16(sprite);
 	sprite += 2;
 
-	if ((loc10 & 0x1) != 0 && (flags & 0x2000) == 0) loc3E = sprite;
-
-	if ((flags & 0x400) != 0) {
+	if ((spriteFlags & 0x1) != 0) {
+		if ((flags & 0x2000) == 0) houseColors = sprite;
 		sprite += 16;
 	}
 
-	if ((loc10 & 0x2) == 0) {
-		Format80_Decode(g_spriteBuffer, sprite, locbx);
+	if ((spriteFlags & 0x2) == 0) {
+		Format80_Decode(g_spriteBuffer, sprite, spriteDecodedLength);
 
 		sprite = g_spriteBuffer;
 	}
 
 	if ((flags & 0x2) == 0) {
-		loc2A = posY - top;
+		/* distance between top of window and top of sprite */
+		distY = posY - top;
 	} else {
-		loc2A = bottom - posY - loc12;
+		/* distance between bottom of window and bottom of sprite */
+		distY = bottom - posY - spriteHeight;
 	}
 
-	if (loc2A < 0) {
-		loc12 += loc2A;
-		if (loc12 <= 0) return;
+	if (distY < 0) {
+		/* means the sprite begins outside the window,
+		 * need to skip a few rows before drawing */
+		spriteHeight += distY;
+		if (spriteHeight <= 0) return;
 
-		loc2A = -loc2A;
+		distY = -distY;
 
-		while (loc2A > 0) {
-			loc38 = sprite;
-			count = loc1A;
-			loc1C = loc1A;
+		while (distY > 0) {
+			/* skip a row */
+			spriteSave = sprite;
+			count = spriteWidth;
 
 			assert((flags & 0xFF) < 4);
 
@@ -1038,111 +1074,107 @@ void GUI_DrawSprite(Screen screenID, uint8 *sprite, int16 posX, int16 posY, uint
 				count -= *sprite++ - 1;
 			}
 
-			buf += count * (((flags & 0xFF) == 0 || (flags & 0xFF) == 2) ? -1 : 1);
+			/*buf += count * (((flags & 0xFF) == 0 || (flags & 0xFF) == 2) ? -1 : 1);*/
+			if ((flags & 0xFD) == 0) buf -= count;
+			else buf += count;
 
-			loc34 += loc32;
-			if ((loc34 & 0xFF00) == 0) continue;
+			Ycounter += zoomRatioY;
+			if ((Ycounter & 0xFF00) == 0) continue;
 
-			loc2A -= loc34 >> 8;
-			loc34 &= 0xFF;
+			distY -= Ycounter >> 8;
+			Ycounter &= 0xFF;	/* keep only fractional part */
 		}
 
-		if (loc2A < 0) {
-			sprite = loc38;
+		if (distY < 0) {
+			sprite = spriteSave;
 
-			loc2A = -loc2A;
-			loc34 += loc2A << 8;
+			Ycounter += (-distY) << 8;
 		}
 
 		if ((flags & 0x2) == 0) posY = top;
 	}
 
 	if ((flags & 0x2) == 0) {
-		loc1E = bottom - posY;
+		tmpRowCountToDraw = bottom - posY;	/* rows to draw */
 	} else {
-		loc1E = posY + loc12 - top;
+		tmpRowCountToDraw = posY + spriteHeight - top;	/* rows to draw */
 	}
 
-	if (loc1E <= 0) return;
+	if (tmpRowCountToDraw <= 0) return;	/* no row to draw */
 
-	if (loc1E < loc12) {
-		loc12 = loc1E;
+	if (tmpRowCountToDraw < spriteHeight) {
+		/* there are a few rows to skip at the end */
+		spriteHeight = tmpRowCountToDraw;
 		if ((flags & 0x2) != 0) posY = top;
 	}
 
-	loc1E = 0;
+	pixelSkipStart = 0;
 	if (posX < 0) {
-		loc14 += posX;
-		loc1E = -posX;
-		if (loc1E >= loc16) return;
+		/* skip pixels outside window */
+		pixelCountPerRow += posX;
+		pixelSkipStart = -posX;	/* pixel count to skip at row start */
+		if (pixelSkipStart >= spriteWidthZoomed) return;	/* no pixel to draw */
 		posX = 0;
 	}
 
-	loc20 = 0;
-	loc3A = width - posX;
-	if (loc3A <= 0) return;
+	pixelSkipEnd = 0;
+	distX = width - posX;	/* distance between left of sprite and right of window */
+	if (distX <= 0) return;	/* no pixel to draw */
 
-	if (loc3A < loc14) {
-		loc14 = loc3A;
-		loc20 = loc16 - loc1E - loc14;
+	if (distX < pixelCountPerRow) {
+		pixelCountPerRow = distX;
+		pixelSkipEnd = spriteWidthZoomed - pixelSkipStart - pixelCountPerRow;	/* pixel count to skip at row end */
 	}
 
-	loc3A = SCREEN_WIDTH;
-	loc22 = posY;
-
+	/* move pointer to 1st pixel of 1st row to draw */
+	buf += posY * SCREEN_WIDTH + posX;
 	if ((flags & 0x2) != 0) {
-		loc3A = - loc3A;
-		loc22 += loc12 - 1;
+		buf += (spriteHeight - 1) * SCREEN_WIDTH;
 	}
-
-	buf += loc22 * SCREEN_WIDTH + posX;
 
 	if ((flags & 0x1) != 0) {
-		uint16 tmp = loc1E;
-		loc1E = loc20;
-		loc20 = tmp;
-		buf += loc14 - 1;
+		/* XCHG pixelSkipStart, pixelSkipEnd */
+		uint16 tmp = pixelSkipStart;
+		pixelSkipStart = pixelSkipEnd;
+		pixelSkipEnd = tmp;
+		buf += pixelCountPerRow - 1;
 	}
 
 	b = buf;
 
 	if ((flags & 0x4) != 0) {
-		loc20 = 0;
-		loc44 = loc1E;
-		loc1E = (loc44 << 8) / loc30;
+		pixelSkipEnd = 0;
+		pixelSkipStart = (pixelSkipStart << 8) / zoomRatioX;
 	}
 
-	if ((loc34 & 0xFF00) == 0) {
-	l__04A4:
-		while (true) {
-			loc34 += loc32;
+	assert((flags & 0xFF) < 4);
 
-			if ((loc34 & 0xFF00) != 0) break;
-			count = loc1A;
-			loc1C = loc1A;
+	do {
+		/* drawing loop */
+		if ((Ycounter & 0xFF00) == 0) {
+			while (true) {
+				Ycounter += zoomRatioY;
 
-			assert((flags & 0xFF) < 4);
+				if ((Ycounter & 0xFF00) != 0) break;
+				count = spriteWidth;
 
-			while (count > 0) {
-				while (count != 0) {
-					count--;
-					if (*sprite++ == 0) break;
+				while (count > 0) {
+					while (count != 0) {
+						count--;
+						if (*sprite++ == 0) break;
+					}
+					if (sprite[-1] != 0 && count == 0) break;
+
+					count -= *sprite++ - 1;
 				}
-				if (sprite[-1] != 0 && count == 0) break;
 
-				count -= *sprite++ - 1;
+				if ((flags & 0xFD) == 0) buf -= count;
+				else buf += count;
 			}
-
-			buf += count * (((flags & 0xFF) == 0 || (flags & 0xFF) == 2) ? -1 : 1);
+			spriteSave = sprite;
 		}
-		loc38 = sprite;
-	}
 
-	while (true) {
-		loc1C = loc1A;
-		count = loc1E;
-
-		assert((flags & 0xFF) < 4);
+		count = pixelSkipStart;
 
 		while (count > 0) {
 			while (count != 0) {
@@ -1154,17 +1186,20 @@ void GUI_DrawSprite(Screen screenID, uint8 *sprite, int16 posX, int16 posY, uint
 			count -= *sprite++ - 1;
 		}
 
-		buf += count * (((flags & 0xFF) == 0 || (flags & 0xFF) == 2) ? -1 : 1);
+		if ((flags & 0xFD) == 0) buf -= count;
+		else buf += count;
 
-		if (loc1C != 0) {
-			count += loc14;
+		if (spriteWidth != 0) {
+			count += pixelCountPerRow;
 			if (count > 0) {
 				uint8 v;
 
 				while (count > 0) {
 					v = *sprite++;
 					if (v == 0) {
-						buf += *sprite * (((flags & 0xFF) == 0 || (flags & 0xFF) == 2) ? 1 : -1);
+						/* run length encoding of transparent pixels */
+						if ((flags & 0xFD) == 0) buf += *sprite;
+						else buf -= *sprite;
 						count -= *sprite++;
 						continue;
 					}
@@ -1175,7 +1210,7 @@ void GUI_DrawSprite(Screen screenID, uint8 *sprite, int16 posX, int16 posY, uint
 							*buf = v;
 							break;
 
-						case 1: {
+						case 1: {	/* remap */
 							int16 i;
 
 							for(i = 0; i < remapCount; i++) v = remap[v];
@@ -1185,7 +1220,7 @@ void GUI_DrawSprite(Screen screenID, uint8 *sprite, int16 posX, int16 posY, uint
 							break;
 						}
 
-						case 2:
+						case 2:	/* blur ? */
 							s_variable_74 += s_variable_72;
 
 							if ((s_variable_74 & 0xFF00) == 0) {
@@ -1196,7 +1231,7 @@ void GUI_DrawSprite(Screen screenID, uint8 *sprite, int16 posX, int16 posY, uint
 							}
 							break;
 
-						case 3: case 7: {
+						case 3: case 7: {	/* remap + blur ? (+ has house colors) */
 							int16 i;
 
 							v = *buf;
@@ -1208,14 +1243,14 @@ void GUI_DrawSprite(Screen screenID, uint8 *sprite, int16 posX, int16 posY, uint
 							break;
 						}
 
-						case 4:
-							*buf = loc3E[v];
+						case 4:	/* sprite has house colors */
+							*buf = houseColors[v];
 							break;
 
-						case 5: {
+						case 5: {	/* remap +  sprite has house colors */
 							int16 i;
 
-							v = loc3E[v];
+							v = houseColors[v];
 
 							for(i = 0; i < remapCount; i++) v = remap[v];
 
@@ -1224,11 +1259,11 @@ void GUI_DrawSprite(Screen screenID, uint8 *sprite, int16 posX, int16 posY, uint
 							break;
 						}
 
-						case 6:
+						case 6:	/* blur ? + sprite has house colors */
 							s_variable_74 += s_variable_72;
 
 							if ((s_variable_74 & 0xFF00) == 0) {
-								*buf = loc3E[v];
+								*buf = houseColors[v];
 							} else {
 								s_variable_74 &= 0xFF;
 								*buf = buf[s_variable_70];
@@ -1236,12 +1271,13 @@ void GUI_DrawSprite(Screen screenID, uint8 *sprite, int16 posX, int16 posY, uint
 							break;
 					}
 
-					buf += (((flags & 0xFF) == 0 || (flags & 0xFF) == 2) ? 1 : -1);
+					if ((flags & 0xFD) == 0) buf++;
+					else buf--;
 					count--;
 				}
 			}
 
-			count += loc20;
+			count += pixelSkipEnd;
 			if (count != 0) {
 				while (count > 0) {
 					while (count != 0) {
@@ -1253,19 +1289,20 @@ void GUI_DrawSprite(Screen screenID, uint8 *sprite, int16 posX, int16 posY, uint
 					count -= *sprite++ - 1;
 				}
 
-				buf += count * (((flags & 0xFF) == 0 || (flags & 0xFF) == 2) ? -1 : 1);
+				if ((flags & 0xFD) == 0) buf -= count;
+				else buf += count;
 			}
 		}
 
-		b += loc3A;
+		if ((flags & 0x2) != 0)	b -= SCREEN_WIDTH;
+		else b += SCREEN_WIDTH;
 		buf = b;
 
-		if (--loc12 == 0) return;
+		--spriteHeight;
 
-		loc34 -= 0x100;
-		if ((loc34 & 0xFF00) == 0) goto l__04A4;
-		sprite = loc38;
-	}
+		Ycounter -= 0x100;
+		if ((Ycounter & 0xFF00) != 0) sprite = spriteSave;
+	} while (spriteHeight > 0);
 }
 
 /**
@@ -1278,9 +1315,9 @@ void GUI_DrawSprite(Screen screenID, uint8 *sprite, int16 posX, int16 posY, uint
 static uint16 Update_Score(int16 score, uint16 *harvestedAllied, uint16 *harvestedEnemy, uint8 houseID)
 {
 	PoolFindStruct find;
-	uint16 locdi = 0;
 	uint16 targetTime;
-	uint16 loc0C = 0;
+	uint16 sumHarvestedAllied = 0;
+	uint16 sumHarvestedEnnemy = 0;
 	uint32 tmp;
 
 	if (score < 0) score = 0;
@@ -1312,18 +1349,18 @@ static uint16 Update_Score(int16 score, uint16 *harvestedAllied, uint16 *harvest
 		if (u == NULL) break;
 
 		if (House_AreAllied(Unit_GetHouseID(u), g_playerHouseID)) {
-			locdi += u->amount * 7;
+			sumHarvestedAllied += u->amount * 7;
 		} else {
-			loc0C += u->amount * 7;
+			sumHarvestedEnnemy += u->amount * 7;
 		}
 	}
 
 	g_validateStrictIfZero--;
 
-	tmp = *harvestedEnemy + loc0C;
+	tmp = *harvestedEnemy + sumHarvestedEnnemy;
 	*harvestedEnemy = (tmp > 65000) ? 65000 : (tmp & 0xFFFF);
 
-	tmp = *harvestedAllied + locdi;
+	tmp = *harvestedAllied + sumHarvestedAllied;
 	*harvestedAllied = (tmp > 65000) ? 65000 : (tmp & 0xFFFF);
 
 	score += House_Get_ByIndex(houseID)->credits / 100;
@@ -1475,19 +1512,19 @@ static void GUI_EndStats_Sleep(uint16 delay)
  */
 void GUI_EndStats_Show(uint16 killedAllied, uint16 killedEnemy, uint16 destroyedAllied, uint16 destroyedEnemy, uint16 harvestedAllied, uint16 harvestedEnemy, int16 score, uint8 houseID)
 {
-	uint16 loc06;
 	Screen oldScreenID;
-	uint16 loc16;
-	uint16 loc18;
-	uint16 loc1A;
-	uint16 loc32[3][2][2];
+	uint16 statsBoxCount;
+	uint16 textLeft;	/* text left position */
+	uint16 statsBarWidth;	/* available width to draw the score bars */
+	struct { uint16 value; uint16 increment; } scores[3][2];
 	uint16 i;
 
 	s_ticksPlayed = ((g_timerGame - g_tickScenarioStart) / 3600) + 1;
 
 	score = Update_Score(score, &harvestedAllied, &harvestedEnemy, houseID);
 
-	loc16 = (g_scenarioID == 1) ? 2 : 3;
+	/* 1st scenario doesn't have the "Building destroyed" stats */
+	statsBoxCount = (g_scenarioID == 1) ? 2 : 3;
 
 	GUI_Mouse_Hide_Safe();
 
@@ -1501,14 +1538,12 @@ void GUI_EndStats_Show(uint16 killedAllied, uint16 killedEnemy, uint16 destroyed
 	GUI_DrawTextOnFilledRectangle(String_Get_ByIndex(STR_UNITS_DESTROYED_BY), 119);
 	if (g_scenarioID != 1) GUI_DrawTextOnFilledRectangle(String_Get_ByIndex(STR_BUILDINGS_DESTROYED_BY), 155);
 
-	loc06 = max(Font_GetStringWidth(String_Get_ByIndex(STR_YOU)), Font_GetStringWidth(String_Get_ByIndex(STR_ENEMY)));
+	textLeft = 19 + max(Font_GetStringWidth(String_Get_ByIndex(STR_YOU)), Font_GetStringWidth(String_Get_ByIndex(STR_ENEMY)));
+	statsBarWidth = 261 - textLeft;
 
-	loc18 = loc06 + 19;
-	loc1A = 261 - loc18;
-
-	for (i = 0; i < loc16; i++) {
-		GUI_DrawText_Wrapper(String_Get_ByIndex(STR_YOU), loc18 - 4,  92 + (i * 36), 0xF, 0, 0x221);
-		GUI_DrawText_Wrapper(String_Get_ByIndex(STR_ENEMY), loc18 - 4, 101 + (i * 36), 0xF, 0, 0x221);
+	for (i = 0; i < statsBoxCount; i++) {
+		GUI_DrawText_Wrapper(String_Get_ByIndex(STR_YOU), textLeft - 4,  92 + (i * 36), 0xF, 0, 0x221);
+		GUI_DrawText_Wrapper(String_Get_ByIndex(STR_ENEMY), textLeft - 4, 101 + (i * 36), 0xF, 0, 0x221);
 	}
 
 	Music_Play(17 + Tools_RandomLCG_Range(0, 5));
@@ -1517,83 +1552,73 @@ void GUI_EndStats_Show(uint16 killedAllied, uint16 killedEnemy, uint16 destroyed
 
 	Input_History_Clear();
 
-	loc32[0][0][0] = harvestedAllied;
-	loc32[0][1][0] = harvestedEnemy;
-	loc32[1][0][0] = killedEnemy;
-	loc32[1][1][0] = killedAllied;
-	loc32[2][0][0] = destroyedEnemy;
-	loc32[2][1][0] = destroyedAllied;
+	scores[0][0].value = harvestedAllied;
+	scores[0][1].value = harvestedEnemy;
+	scores[1][0].value = killedEnemy;
+	scores[1][1].value = killedAllied;
+	scores[2][0].value = destroyedEnemy;
+	scores[2][1].value = destroyedAllied;
 
-	for (i = 0; i < loc16; i++) {
-		uint16 loc08 = loc32[i][0][0];
-		uint16 loc0A = loc32[i][1][0];
+	for (i = 0; i < statsBoxCount; i++) {
+		uint16 scoreIncrement;
 
-		if (loc08 >= 65000) loc08 = 65000;
-		if (loc0A >= 65000) loc0A = 65000;
+		/* You */
+		if (scores[i][0].value > 65000) scores[i][0].value = 65000;
+		/* Enemy */
+		if (scores[i][1].value > 65000) scores[i][1].value = 65000;
 
-		loc32[i][0][0] = loc08;
-		loc32[i][1][0] = loc0A;
+		scoreIncrement = 1 + (max(scores[i][0].value, scores[i][1].value) / statsBarWidth);
 
-		loc06 = max(loc08, loc0A);
-
-		loc32[i][0][1] = 1 + ((loc06 > loc1A) ? (loc06 / loc1A) : 0);
-		loc32[i][1][1] = 1 + ((loc06 > loc1A) ? (loc06 / loc1A) : 0);
+		scores[i][0].increment = scoreIncrement;
+		scores[i][1].increment = scoreIncrement;
 	}
 
 	GUI_EndStats_Sleep(45);
 	GUI_HallOfFame_DrawRank(score, true);
 	GUI_EndStats_Sleep(45);
 
-	for (i = 0; i < loc16; i++) {
-		uint16 loc02;
+	for (i = 0; i < statsBoxCount; i++) {
+		uint16 j;
 
 		GUI_HallOfFame_Tick();
 
-		for (loc02 = 0; loc02 < 2; loc02++) {
+		for (j = 0; j < 2; j++) {	/* 0 : You, 1 : Enemy */
 			uint8 colour;
-			uint16 loc04;
-			uint16 locdi;
-			uint16 loc0E;
-			uint16 loc10;
-			uint16 loc0C;
+			uint16 posX;
+			uint16 posY;
+			uint16 score;
 
 			GUI_HallOfFame_Tick();
 
-			colour = (loc02 == 0) ? 255 : 209;
-			loc04 = loc18;
+			colour = (j == 0) ? 255 : 209;
+			posX = textLeft;
+			posY = 93 + (i * 36) + (j * 9);
 
-			locdi = 93 + (i * 36) + (loc02 * 9);
-
-			loc0E = loc32[i][loc02][0];
-			loc10 = loc32[i][loc02][1];
-
-			for (loc0C = 0; loc0C < loc0E; loc0C += loc10) {
-				GUI_DrawFilledRectangle(271, locdi, 303, locdi + 5, 226);
-
-				GUI_DrawText_Wrapper("%u", 287, locdi - 1, 0x14, 0, 0x121, loc0C);
+			for (score = 0; score < scores[i][j].value; score += scores[i][j].increment) {
+				GUI_DrawFilledRectangle(271, posY, 303, posY + 5, 226);
+				GUI_DrawText_Wrapper("%u", 287, posY - 1, 0x14, 0, 0x121, score);
 
 				GUI_HallOfFame_Tick();
 
 				g_timerTimeout = 1;
 
-				GUI_DrawLine(loc04, locdi, loc04, locdi + 5, colour);
+				GUI_DrawLine(posX, posY, posX, posY + 5, colour);
 
-				loc04++;
+				posX++;
 
-				GUI_DrawLine(loc04, locdi + 1, loc04, locdi + 6, 12);
+				GUI_DrawLine(posX, posY + 1, posX, posY + 6, 12);	/* shadow */
 
-				GFX_Screen_Copy2(loc18, locdi, loc18, locdi, 304, 7, SCREEN_1, SCREEN_0, false);
+				GFX_Screen_Copy2(textLeft, posY, textLeft, posY, 304, 7, SCREEN_1, SCREEN_0, false);
 
 				Driver_Sound_Play(52, 0xFF);
 
 				GUI_EndStats_Sleep(g_timerTimeout);
 			}
 
-			GUI_DrawFilledRectangle(271, locdi, 303, locdi + 5, 226);
+			GUI_DrawFilledRectangle(271, posY, 303, posY + 5, 226);
+			GUI_DrawText_Wrapper("%u", 287, posY - 1, 0xF, 0, 0x121, scores[i][j].value);
 
-			GUI_DrawText_Wrapper("%u", 287, locdi - 1, 0xF, 0, 0x121, loc0E);
-
-			GFX_Screen_Copy2(loc18, locdi, loc18, locdi, 304, 7, SCREEN_1, SCREEN_0, false);
+			GFX_Screen_Copy2(textLeft, posY, textLeft, posY, 304, 7, SCREEN_1, SCREEN_0, false);
 
 			Driver_Sound_Play(38, 0xFF);
 
@@ -1646,7 +1671,7 @@ uint8 GUI_PickHouse(void)
 		uint16 yes_no;
 
 		for (i = 0; i < 3; i++) {
-			static const uint8 l_var_2BAC[3][3] = {
+			static const uint8 l_houses[3][3] = {
 				/* x, y, shortcut */
 				{ 16, 56, 31 }, /* A */
 				{ 112, 56, 25 }, /* O */
@@ -1654,7 +1679,7 @@ uint8 GUI_PickHouse(void)
 			};
 			Widget *w2;
 
-			w2 = GUI_Widget_Allocate(i + 1, l_var_2BAC[i][2], l_var_2BAC[i][0], l_var_2BAC[i][1], 0xFFFF, 0);
+			w2 = GUI_Widget_Allocate(i + 1, l_houses[i][2], l_houses[i][0], l_houses[i][1], 0xFFFF, 0);
 
 			memset(&w2->flags, 0, sizeof(w2->flags));
 			w2->flags.loseSelect = true;
@@ -1706,7 +1731,10 @@ uint8 GUI_PickHouse(void)
 
 		GUI_SetPaletteAnimated(palette, 15);
 
-		if (g_debugSkipDialogs || g_debugScenario) break;
+		if (g_debugSkipDialogs || g_debugScenario) {
+			Debug("Skipping House selection confirmation.\n");
+			break;
+		}
 
 		w = GUI_Widget_Link(w, GUI_Widget_Allocate(1, GUI_Widget_GetShortcut(String_Get_ByIndex(STR_YES)[0]), 168, 168, 373, 0));
 		w = GUI_Widget_Link(w, GUI_Widget_Allocate(2, GUI_Widget_GetShortcut(String_Get_ByIndex(STR_NO)[0]), 240, 168, 375, 0));
@@ -1718,7 +1746,7 @@ uint8 GUI_PickHouse(void)
 		GUI_Mouse_Show_Safe();
 
 		strncpy(g_readBuffer, String_Get_ByIndex(STR_HOUSE_HARKONNENFROM_THE_DARK_WORLD_OF_GIEDI_PRIME_THE_SAVAGE_HOUSE_HARKONNEN_HAS_SPREAD_ACROSS_THE_UNIVERSE_A_CRUEL_PEOPLE_THE_HARKONNEN_ARE_RUTHLESS_TOWARDS_BOTH_FRIEND_AND_FOE_IN_THEIR_FANATICAL_PURSUIT_OF_POWER + houseID * 40), g_readBufferSize);
-		GUI_Mentat_Show(g_readBuffer, House_GetWSAHouseFilename(houseID), NULL, false);
+		GUI_Mentat_Show(g_readBuffer, House_GetWSAHouseFilename(houseID), NULL);
 
 		Sprites_LoadImage(String_GenerateFilename("MISC"), SCREEN_1, g_palette1);
 
@@ -1783,7 +1811,7 @@ uint8 GUI_PickHouse(void)
  * @param reference The colour to use as reference.
  * @param intensity The intensity to use.
  */
-void GUI_Palette_CreateMapping(uint8 *palette, uint8 *colours, uint8 reference, uint8 intensity)
+void GUI_Palette_CreateMapping(const uint8 *palette, uint8 *colours, uint8 reference, uint8 intensity)
 {
 	uint16 index;
 
@@ -1924,7 +1952,7 @@ void GUI_DrawProgressbar(uint16 current, uint16 max)
 
 /**
  * Draw the interface (borders etc etc) and radar on the screen.
- * @param screenID The screen to draw the radar on.
+ * @param screenID The screen to draw the radar on. if SCREEN_0, SCREEN_1 is used as back buffer
  */
 void GUI_DrawInterfaceAndRadar(Screen screenID)
 {
@@ -1944,9 +1972,9 @@ void GUI_DrawInterfaceAndRadar(Screen screenID)
 
 	g_textDisplayNeedsUpdate = true;
 
-	GUI_Widget_Viewport_RedrawMap(g_screenActiveID);
+	GUI_Widget_Viewport_RedrawMap(SCREEN_ACTIVE);
 
-	GUI_DrawScreen(g_screenActiveID);
+	GUI_DrawScreen(SCREEN_ACTIVE);
 
 	GUI_Widget_ActionPanel_Draw(true);
 
@@ -1983,7 +2011,7 @@ void GUI_DrawInterfaceAndRadar(Screen screenID)
 		Unit_UpdateMap(1, u);
 	}
 
-	if (screenID == 0) {
+	if (screenID == SCREEN_0) {
 		GFX_Screen_SetActive(SCREEN_0);
 
 		GUI_Mouse_Hide_Safe();
@@ -2013,7 +2041,7 @@ void GUI_DrawCredits(uint8 houseID, uint16 mode)
 	static int16  creditsAnimationOffset = 0;     /* Offset of the credits for the animation of credits. */
 
 	Screen oldScreenID;
-	uint16 oldValue_07AE_0000;
+	uint16 oldWidgetId;
 	House *h;
 	char charCreditsOld[7];
 	char charCreditsNew[7];
@@ -2037,7 +2065,7 @@ void GUI_DrawCredits(uint8 houseID, uint16 mode)
 
 	oldScreenID = GFX_Screen_SetActive(SCREEN_1);
 
-	oldValue_07AE_0000 = Widget_SetCurrentWidget(4);
+	oldWidgetId = Widget_SetCurrentWidget(4);
 
 	creditsDiff = h->credits - creditsAnimation;
 	if (creditsDiff != 0) {
@@ -2076,7 +2104,7 @@ void GUI_DrawCredits(uint8 houseID, uint16 mode)
 		creditsNew += 1;
 	}
 
-	GUI_DrawSprite(g_screenActiveID, g_sprites[12], 0, 0, 4, 0x4000);
+	GUI_DrawSprite(SCREEN_ACTIVE, g_sprites[12], 0, 0, 4, 0x4000);
 
 	g_playerCredits = creditsOld;
 
@@ -2090,26 +2118,26 @@ void GUI_DrawCredits(uint8 houseID, uint16 mode)
 		spriteID = (charCreditsOld[i] == ' ') ? 13 : charCreditsOld[i] - 34;
 
 		if (charCreditsOld[i] != charCreditsNew[i]) {
-			GUI_DrawSprite(g_screenActiveID, g_sprites[spriteID], left, offset - creditsAnimationOffset, 4, 0x4000);
+			GUI_DrawSprite(SCREEN_ACTIVE, g_sprites[spriteID], left, offset - creditsAnimationOffset, 4, 0x4000);
 			if (creditsAnimationOffset == 0) continue;
 
 			spriteID = (charCreditsNew[i] == ' ') ? 13 : charCreditsNew[i] - 34;
 
-			GUI_DrawSprite(g_screenActiveID, g_sprites[spriteID], left, offset + 8 - creditsAnimationOffset, 4, 0x4000);
+			GUI_DrawSprite(SCREEN_ACTIVE, g_sprites[spriteID], left, offset + 8 - creditsAnimationOffset, 4, 0x4000);
 		} else {
-			GUI_DrawSprite(g_screenActiveID, g_sprites[spriteID], left, 1, 4, 0x4000);
+			GUI_DrawSprite(SCREEN_ACTIVE, g_sprites[spriteID], left, 1, 4, 0x4000);
 		}
 	}
 
-	if (oldScreenID != g_screenActiveID) {
+	if (!GFX_Screen_IsActive(oldScreenID)) {
 		GUI_Mouse_Hide_InWidget(5);
-		GUI_Screen_Copy(g_curWidgetXBase, g_curWidgetYBase, g_curWidgetXBase, g_curWidgetYBase - 40, g_curWidgetWidth, g_curWidgetHeight, g_screenActiveID, oldScreenID);
+		GUI_Screen_Copy(g_curWidgetXBase, g_curWidgetYBase, g_curWidgetXBase, g_curWidgetYBase - 40, g_curWidgetWidth, g_curWidgetHeight, SCREEN_ACTIVE, oldScreenID);
 		GUI_Mouse_Show_InWidget();
 	}
 
 	GFX_Screen_SetActive(oldScreenID);
 
-	Widget_SetCurrentWidget(oldValue_07AE_0000);
+	Widget_SetCurrentWidget(oldWidgetId);
 }
 
 /**
@@ -2725,9 +2753,9 @@ static void GUI_FactoryWindow_Init(void)
 
 /**
  * Display the window where you can order/build stuff for a structure.
- * @param var06 Unknown.
+ * @param isConstructionYard True if this is for a construction yard.
  * @param isStarPort True if this is for a starport.
- * @param var0A Unknown.
+ * @param upgradeCost Cost of upgrading the structure.
  * @return Unknown value.
  */
 FactoryResult GUI_DisplayFactoryWindow(bool isConstructionYard, bool isStarPort, uint16 upgradeCost)
@@ -2830,7 +2858,7 @@ static void GUI_StrategicMap_AnimateArrows(void)
 
 	s_arrowAnimationState = (s_arrowAnimationState + 1) % 4;
 
-	memcpy(g_palette1 + 251 * 3, s_var_81BA + s_arrowAnimationState * 3, 4 * 3);
+	memcpy(g_palette1 + 251 * 3, s_strategicMapArrowColors + s_arrowAnimationState * 3, 4 * 3);
 
 	GFX_SetPalette(g_palette1);
 }
@@ -3226,8 +3254,8 @@ uint16 GUI_StrategicMap_Show(uint16 campaignID, bool win)
 	}
 
 	memcpy(loc316, g_palette1 + 251 * 3, 12);
-	memcpy(s_var_81BA, g_palette1 + (144 + (g_playerHouseID * 16)) * 3, 4 * 3);
-	memcpy(s_var_81BA + 4 * 3, s_var_81BA, 4 * 3);
+	memcpy(s_strategicMapArrowColors, g_palette1 + (144 + (g_playerHouseID * 16)) * 3, 4 * 3);
+	memcpy(s_strategicMapArrowColors + 4 * 3, s_strategicMapArrowColors, 4 * 3);
 
 	GUI_Screen_Copy(x, y, 0, 152, 7, 40, SCREEN_2, SCREEN_2);
 	GUI_Screen_Copy(x, y, 33, 152, 7, 40, SCREEN_2, SCREEN_2);
@@ -3331,19 +3359,6 @@ uint16 GUI_StrategicMap_Show(uint16 campaignID, bool win)
 }
 
 /**
- * Clear the screen.
- * @param screenID Which screen to clear.
- */
-void GUI_ClearScreen(Screen screenID)
-{
-	Screen oldScreenID = GFX_Screen_SetActive(screenID);
-
-	GFX_ClearScreen();
-
-	GFX_Screen_SetActive(oldScreenID);
-}
-
-/**
  * Draw a string to the screen using a fixed width for each char.
  *
  * @param string The string to draw.
@@ -3402,7 +3417,7 @@ void GUI_FactoryWindow_DrawDetails(void)
 		uint16 i;
 		uint16 j;
 
-		GUI_DrawSprite(g_screenActiveID, g_sprites[64], x, y, 0, 0);
+		GUI_DrawSprite(SCREEN_1, g_sprites[64], x, y, 0, 0);
 		x++;
 		y++;
 
@@ -3412,7 +3427,7 @@ void GUI_FactoryWindow_DrawDetails(void)
 
 		for (j = 0; j < g_table_structure_layoutSize[si->layout].height; j++) {
 			for (i = 0; i < g_table_structure_layoutSize[si->layout].width; i++) {
-				GUI_DrawSprite(g_screenActiveID, sprite, x + i * width, y + j * width, 0, 0);
+				GUI_DrawSprite(SCREEN_1, sprite, x + i * width, y + j * width, 0, 0);
 			}
 		}
 	}
@@ -3491,7 +3506,7 @@ void GUI_FactoryWindow_UpdateDetails(void)
 	if (oi->available == -1) return;
 
 	GUI_Mouse_Hide_Safe();
-	GUI_Screen_Copy(16, (oi->available == item->amount) ? 169 : 160, 16, 99, 23, 9, SCREEN_1, g_screenActiveID);
+	GUI_Screen_Copy(16, (oi->available == item->amount) ? 169 : 160, 16, 99, 23, 9, SCREEN_1, SCREEN_ACTIVE);
 	GUI_Mouse_Show_Safe();
 }
 
@@ -3514,7 +3529,8 @@ void GUI_FactoryWindow_UpdateSelection(bool selectionChanged)
 
 		memset(g_palette1 + 255 * 3, 0x3F, 3);
 
-		GFX_SetPalette(g_palette1);
+		/* calling GFX_SetPalette() now is useless as it will be done at the end of the function */
+		/*GFX_SetPalette(g_palette1);*/
 
 		paletteChangeTimer = 0;
 		paletteColour = 0;
@@ -3759,7 +3775,7 @@ void GUI_Mouse_Show(void)
 {
 	int left, top;
 
-	if (g_var_7097 == 1) return;
+	if (g_mouseDisabled == 1) return;
 	if (g_mouseHiddenDepth == 0 || --g_mouseHiddenDepth != 0) return;
 
 	left = g_mouseX - g_mouseSpriteHotspotX;
@@ -3787,7 +3803,7 @@ void GUI_Mouse_Show(void)
  */
 void GUI_Mouse_Hide(void)
 {
-	if (g_var_7097 == 1) return;
+	if (g_mouseDisabled == 1) return;
 
 	if (g_mouseHiddenDepth == 0 && s_mouseSpriteWidth != 0) {
 		if (g_mouseSpriteBuffer != NULL) {
@@ -3807,12 +3823,8 @@ void GUI_Mouse_Hide(void)
 void GUI_Mouse_Hide_Safe(void)
 {
 	while (g_mouseLock != 0) sleepIdle();
+	if (g_mouseDisabled == 1) return;
 	g_mouseLock++;
-
-	if (g_var_7097 == 1) {
-		g_mouseLock--;
-		return;
-	}
 
 	GUI_Mouse_Hide();
 
@@ -3826,12 +3838,8 @@ void GUI_Mouse_Hide_Safe(void)
 void GUI_Mouse_Show_Safe(void)
 {
 	while (g_mouseLock != 0) sleepIdle();
+	if (g_mouseDisabled == 1) return;
 	g_mouseLock++;
-
-	if (g_var_7097 == 1) {
-		g_mouseLock--;
-		return;
-	}
 
 	GUI_Mouse_Show();
 
@@ -4038,7 +4046,7 @@ void GUI_Mouse_SetPosition(uint16 x, uint16 y)
  * @param screenID The screen to do the remapping on.
  * @param remap The pointer to the remap palette.
  */
-void GUI_Palette_RemapScreen(uint16 left, uint16 top, uint16 width, uint16 height, Screen screenID, uint8 *remap)
+void GUI_Palette_RemapScreen(uint16 left, uint16 top, uint16 width, uint16 height, Screen screenID, const uint8 *remap)
 {
 	uint8 *screen = GFX_Screen_Get_ByIndex(screenID);
 
@@ -4244,7 +4252,7 @@ void GUI_HallOfFame_Show(uint16 score)
 			Widget_SetAndPaintCurrentWidget(19);
 			GFX_Screen_SetActive(oldScreenID);
 
-			GUI_EditBox(name, 5, 19, NULL, &GUI_HallOfFame_Tick, 0);
+			GUI_EditBox(name, 5, 19, NULL, &GUI_HallOfFame_Tick, false);
 
 			if (*name == '\0') continue;
 
@@ -4423,7 +4431,7 @@ void GUI_Palette_CreateRemap(uint8 houseID)
 void GUI_DrawScreen(Screen screenID)
 {
 	static uint32 s_timerViewportMessage = 0;
-	bool loc10;
+	bool hasScrolled = false;
 	Screen oldScreenID;
 	uint16 xpos;
 
@@ -4432,11 +4440,9 @@ void GUI_DrawScreen(Screen screenID)
 	if (g_selectionType == SELECTIONTYPE_UNKNOWN6) return;
 	if (g_selectionType == SELECTIONTYPE_INTRO) return;
 
-	loc10 = false;
-
 	oldScreenID = GFX_Screen_SetActive(screenID);
 
-	if (screenID != SCREEN_0) g_viewport_forceRedraw = true;
+	if (!GFX_Screen_IsActive(SCREEN_0)) g_viewport_forceRedraw = true;
 
 	Explosion_Tick();
 	Animation_Tick();
@@ -4454,11 +4460,11 @@ void GUI_DrawScreen(Screen screenID)
 
 		int16 x, y;
 
-		if (xOverlap < 1 || yOverlap < 1) g_viewport_forceRedraw = true;
-
-		if (!g_viewport_forceRedraw && (xOverlap != 15 || yOverlap != 10)) {
+		if (xOverlap < 1 || yOverlap < 1) {
+			g_viewport_forceRedraw = true;
+		} else if (!g_viewport_forceRedraw && (xOverlap != 15 || yOverlap != 10)) {
 			Map_SetSelectionObjectPosition(0xFFFF);
-			loc10 = true;
+			hasScrolled = true;
 
 			GUI_Mouse_Hide_InWidget(2);
 
@@ -4481,7 +4487,7 @@ void GUI_DrawScreen(Screen screenID)
 		}
 	}
 
-	if (loc10) {
+	if (hasScrolled) {
 		Map_SetSelectionObjectPosition(0xFFFF);
 
 		for (xpos = 0; xpos < 14; xpos++) {
@@ -4506,7 +4512,7 @@ void GUI_DrawScreen(Screen screenID)
 		}
 	}
 
-	GUI_Widget_Viewport_Draw(g_viewport_forceRedraw, loc10, screenID != SCREEN_0);
+	GUI_Widget_Viewport_Draw(g_viewport_forceRedraw, hasScrolled, !GFX_Screen_IsActive(SCREEN_0));
 
 	g_viewport_forceRedraw = false;
 
@@ -4535,7 +4541,7 @@ void GUI_SetPaletteAnimated(uint8 *palette, int16 ticksOfAnimation)
 	uint8 data[256 * 3];
 	int i;
 
-	if (g_paletteActive == NULL || palette == NULL) return;
+	if (palette == NULL) return;
 
 	memcpy(data, g_paletteActive, 256 * 3);
 
@@ -4559,36 +4565,35 @@ void GUI_SetPaletteAnimated(uint8 *palette, int16 ticksOfAnimation)
 	tickCurrent = 0;
 	timerCurrent = g_timerSleep;
 
-	do {
-		progress = false;
+	for (;;) {
+		progress = false;	/* will be set true if any color is changed */
 
 		tickCurrent  += (uint16)ticks;
 		timerCurrent += (uint32)(tickCurrent >> 8);
 		tickCurrent  &= 0xFF;
 
 		for (i = 0; i < 256 * 3; i++) {
-			int16 current = palette[i];
-			int16 goal = data[i];
+			int16 goal = palette[i];
+			int16 current = data[i];
 
 			if (goal == current) continue;
 
-			if (goal < current) {
-				goal = min(goal + diffPerTick, current);
-				progress = true;
-			}
-
+			progress = true;
 			if (goal > current) {
-				goal = max(goal - diffPerTick, current);
-				progress = true;
+				current += diffPerTick;
+				if (current > goal) current = goal;
+			} else {
+				current -= diffPerTick;
+				if (current < goal) current = goal;
 			}
-
-			data[i] = goal & 0xFF;
+			data[i] = (uint8)current;
 		}
 
-		if (progress) {
-			GFX_SetPalette(data);
+		/* if no color was changed, the target palette has been reached */
+		if (!progress) break;
 
-			while (g_timerSleep < timerCurrent) sleepIdle();
-		}
-	} while (progress);
+		GFX_SetPalette(data);
+
+		while (g_timerSleep < timerCurrent) sleepIdle();
+	}
 }

@@ -9,11 +9,22 @@
 	#include <io.h>
 	#include <windows.h>
 #endif /* _WIN32 */
+#ifdef TOS
+#include <mint/sysbind.h>
+#include <mint/osbind.h>
+#include <mint/ostruct.h>
+#endif /* TOS */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
 #include <time.h>
+#if defined(WITH_SDL) || defined(WITH_SDL2)
+#include <SDL.h>
+#ifdef _WIN32
+#undef main
+#endif
+#endif /* WITH_SDL(2) */
 #include "types.h"
 #include "os/common.h"
 #include "os/error.h"
@@ -60,8 +71,12 @@
 #include "unit.h"
 #include "video/video.h"
 
+#ifdef TOS
+#include "rev.h"
+#endif
 
-const char *window_caption = "OpenDUNE - Pre v0.8";
+
+const char *window_caption = "OpenDUNE - Pre v0.9";
 
 bool g_dune2_enhanced = true; /*!< If false, the game acts exactly like the original Dune2, including bugs. */
 
@@ -421,7 +436,7 @@ static uint16 GameLoop_HandleEvents(const char **strings)
 		key = Input_Wait() & 0x8FF;
 	}
 
-	if (g_var_7097 == 0) {
+	if (g_mouseDisabled == 0) {
 		uint16 y = g_mouseY;
 
 		if (GameLoop_IsInRange(g_mouseX, y, minX, minY, maxX, maxY)) {
@@ -690,8 +705,7 @@ static void GameLoop_GameIntroAnimationMenu(void)
 
 			Sound_Output_Feedback(0xFFFE);
 
-			File_ReadBlockFile("IBM.PAL", g_palette_998A, 256 * 3);
-			memmove(g_palette1, g_palette_998A, 256 * 3);
+			File_ReadBlockFile("IBM.PAL", g_palette1, 256 * 3);
 
 			if (!g_canSkipIntro) {
 				File_Create_Personal("ONETIME.DAT");
@@ -893,6 +907,12 @@ static void GameLoop_Main(void)
 	String_Init();
 	Sprites_Init();
 
+#ifdef MUNT
+	if (IniFile_GetInteger("mt32midi", 1) != 0) Music_InitMT32();
+#else
+	if (IniFile_GetInteger("mt32midi", 0) != 0) Music_InitMT32();
+#endif
+
 	Input_Flags_SetBits(INPUT_FLAG_KEY_REPEAT | INPUT_FLAG_UNKNOWN_0010 | INPUT_FLAG_UNKNOWN_0200 |
 	                    INPUT_FLAG_UNKNOWN_2000);
 	Input_Flags_ClearBits(INPUT_FLAG_KEY_RELEASE | INPUT_FLAG_UNKNOWN_0400 | INPUT_FLAG_UNKNOWN_0100 |
@@ -905,12 +925,13 @@ static void GameLoop_Main(void)
 	g_campaignID = 0;
 	g_scenarioID = 1;
 	g_playerHouseID = HOUSE_INVALID;
-	g_debugScenario = false;
 	g_selectionType = SELECTIONTYPE_MENTAT;
 	g_selectionTypeNew = SELECTIONTYPE_MENTAT;
 
-	g_palette1 = calloc(1, 256 * 3);
-	g_palette2 = calloc(1, 256 * 3);
+	if (g_palette1) Warning("g_palette1\n");
+	else g_palette1 = calloc(1, 256 * 3);
+	if (g_palette2) Warning("g_palette2\n");
+	else g_palette2 = calloc(1, 256 * 3);
 
 	g_readBufferSize = 12000;
 	g_readBuffer = calloc(1, g_readBufferSize);
@@ -919,9 +940,7 @@ static void GameLoop_Main(void)
 
 	free(g_readBuffer); g_readBuffer = NULL;
 
-	File_ReadBlockFile("IBM.PAL", g_palette_998A, 256 * 3);
-
-	memmove(g_palette1, g_palette_998A, 256 * 3);
+	File_ReadBlockFile("IBM.PAL", g_palette1, 256 * 3);
 
 	GUI_ClearScreen(SCREEN_0);
 
@@ -964,15 +983,6 @@ static void GameLoop_Main(void)
 	Structure_Init();
 
 	GUI_Mouse_Show_Safe();
-
-	if (g_debugSkipDialogs) {
-		Music_Play(0);
-
-		free(g_readBuffer);
-		g_readBufferSize = (g_enableVoices == 0) ? 12000 : 20000;
-		g_readBuffer = calloc(1, g_readBufferSize);
-		g_gameMode = GM_NORMAL;
-	}
 
 	for (;; sleepIdle()) {
 		if (g_gameMode == GM_MENU) {
@@ -1030,7 +1040,11 @@ static void GameLoop_Main(void)
 			GUI_ChangeSelectionType(SELECTIONTYPE_MENTAT);
 
 			Game_LoadScenario(g_playerHouseID, g_scenarioID);
-			if (!g_debugScenario && !g_debugSkipDialogs) GUI_Mentat_ShowBriefing();
+			if (!g_debugScenario && !g_debugSkipDialogs) {
+				GUI_Mentat_ShowBriefing();
+			} else {
+				Debug("Skipping GUI_Mentat_ShowBriefing()\n");
+			}
 
 			g_gameMode = GM_NORMAL;
 
@@ -1115,28 +1129,17 @@ static void GameLoop_Main(void)
 
 	GFX_Screen_SetActive(SCREEN_1);
 
-	GFX_ClearScreen();
+	GFX_ClearScreen(SCREEN_1);
 
 	GUI_Screen_FadeIn(g_curWidgetXBase, g_curWidgetYBase, g_curWidgetXBase, g_curWidgetYBase, g_curWidgetWidth, g_curWidgetHeight, SCREEN_1, SCREEN_0);
 }
 
-static bool Unknown_25C4_000E(int screen_magnification, VideoScaleFilter filter)
+/**
+ * Initialize Timer, Video, Mouse, GFX, Fonts, Random number generator
+ * and current Widget
+ */
+static bool OpenDune_Init(int screen_magnification, VideoScaleFilter filter, int frame_rate)
 {
-	Timer_Init();
-
-	if (!Video_Init(screen_magnification, filter)) return false;
-
-	Mouse_Init();
-
-	/* Add the general tickers */
-	Timer_Add(Video_Tick, 1000000 / 60);
-	Timer_Add(Timer_Tick, 1000000 / 60);
-
-	g_var_7097 = -1;
-
-	GFX_Init();
-	GFX_ClearScreen();
-
 	if (!Font_Init()) {
 		Error(
 			"--------------------------\n"
@@ -1149,11 +1152,26 @@ static bool Unknown_25C4_000E(int screen_magnification, VideoScaleFilter filter)
 		return false;
 	}
 
+	Timer_Init();
+
+	if (!Video_Init(screen_magnification, filter)) return false;
+
+	Mouse_Init();
+
+	/* Add the general tickers */
+	Timer_Add(Timer_Tick, 1000000 / 60, false);
+	Timer_Add(Video_Tick, 1000000 / frame_rate, true);
+
+	g_mouseDisabled = -1;
+
+	GFX_Init();
+	GFX_ClearScreen(SCREEN_ACTIVE);
+
 	Font_Select(g_fontNew8p);
 
 	g_palette_998A = calloc(256 * 3, sizeof(uint8));
 
-	memset(&g_palette_998A[45], 63, 3);
+	memset(&g_palette_998A[45], 63, 3);	/* Set color 15 to WHITE */
 
 	GFX_SetPalette(g_palette_998A);
 
@@ -1164,7 +1182,15 @@ static bool Unknown_25C4_000E(int screen_magnification, VideoScaleFilter filter)
 	return true;
 }
 
-#if defined(__APPLE__)
+#ifdef TOS
+void exit_handler(void)
+{
+	printf("Press any key to quit.\n");
+	(void)Cnecin();
+}
+#endif /* TOS */
+
+#if defined(__APPLE__) && defined(SDL_MAJOR_VERSION) && (SDL_MAJOR_VERSION == 1)
 int SDL_main(int argc, char **argv)
 #else
 int main(int argc, char **argv)
@@ -1173,10 +1199,14 @@ int main(int argc, char **argv)
 	bool commit_dune_cfg = false;
 	VideoScaleFilter scale_filter = FILTER_NEAREST_NEIGHBOR;
 	int scaling_factor = 2;
+	int frame_rate = 60;
 	char filter_text[64];
 #if defined(_WIN32)
 	#if defined(__MINGW32__) && defined(__STRICT_ANSI__)
+	#if 0 /* NOTE : disabled because it generates warnings when cross compiling
+	       * for MinGW32 under linux */
 		int __cdecl __MINGW_NOTHROW _fileno (FILE*);
+	#endif
 	#endif
 	FILE *err = fopen("error.log", "w");
 	FILE *out = fopen("output.log", "w");
@@ -1189,6 +1219,24 @@ int main(int argc, char **argv)
 	if (out != NULL) _dup2(_fileno(out), _fileno(stdout));
 	FreeConsole();
 #endif
+#ifdef TOS
+	(void)Cconws(window_caption);
+	(void)Cconws("\r\nrevision:   ");
+	(void)Cconws(g_opendune_revision);
+	(void)Cconws("\r\nbuild date: ");
+	(void)Cconws(g_opendune_build_date);
+	(void)Cconws("\r\n");
+	/* open log files and set buffering mode */
+	g_errlog = fopen("error.log", "w");
+	if(g_errlog != NULL) setvbuf(g_errlog, NULL, _IONBF, 0);
+#ifdef _DEBUG
+	g_outlog = fopen("output.log", "w");
+	if(g_outlog != NULL) setvbuf(g_outlog, NULL, _IOLBF, 0);
+#endif
+	if(atexit(exit_handler) != 0) {
+		Error("atexit() failed\n");
+	}
+#endif
 	CrashLog_Init();
 
 	VARIABLE_NOT_USED(argc);
@@ -1196,6 +1244,20 @@ int main(int argc, char **argv)
 
 	/* Load opendune.ini file */
 	Load_IniFile();
+
+	/* set globals according to opendune.ini */
+	g_dune2_enhanced = (IniFile_GetInteger("dune2_enhanced", 1) != 0) ? true : false;
+	g_debugGame = (IniFile_GetInteger("debug_game", 0) != 0) ? true : false;
+	g_debugScenario = (IniFile_GetInteger("debug_scenario", 0) != 0) ? true : false;
+	g_debugSkipDialogs = (IniFile_GetInteger("debug_skip_dialogs", 0) != 0) ? true : false;
+	s_enableLog = (uint8)IniFile_GetInteger("debug_log_game", 0);
+
+	Debug("Globals :\n");
+	Debug("  g_dune2_enhanced = %d\n", (int)g_dune2_enhanced);
+	Debug("  g_debugGame = %d\n", (int)g_debugGame);
+	Debug("  g_debugScenario = %d\n", (int)g_debugScenario);
+	Debug("  g_debugSkipDialogs = %d\n", (int)g_debugSkipDialogs);
+	Debug("  s_enableLog = %d\n", (int)s_enableLog);
 
 	if (!File_Init()) {
 		exit(1);
@@ -1232,9 +1294,11 @@ int main(int argc, char **argv)
 		}
 	}
 
-	if (!Unknown_25C4_000E(scaling_factor, scale_filter)) exit(1);
+	frame_rate = IniFile_GetInteger("framerate", 60);
 
-	g_var_7097 = 0;
+	if (!OpenDune_Init(scaling_factor, scale_filter, frame_rate)) exit(1);
+
+	g_mouseDisabled = 0;
 
 	GameLoop_Main();
 

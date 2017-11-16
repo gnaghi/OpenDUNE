@@ -63,6 +63,7 @@
       <CompileAs>Default</CompileAs>
       <EnableEnhancedInstructionSet Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">StreamingSIMDExtensions2</EnableEnhancedInstructionSet>
       <EnableEnhancedInstructionSet Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">StreamingSIMDExtensions2</EnableEnhancedInstructionSet>
+!!CPPDEFS!!
     </ClCompile>
     <Link>
       <AdditionalDependencies>winmm.lib;comctl32.lib;Shlwapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
@@ -81,6 +82,9 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="..\source.list" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="..\os\win32\opendune.rc" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

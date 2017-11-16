@@ -188,7 +188,19 @@
       <ExcludedFromBuild>true</ExcludedFromBuild>
       <ObjectFileName>$(IntDir)src\audio\</ObjectFileName>
     </ClCompile>
+    <ClCompile Include="..\src\audio\dsp_atari.c">
+      <ExcludedFromBuild>true</ExcludedFromBuild>
+      <ObjectFileName>$(IntDir)src\audio\</ObjectFileName>
+    </ClCompile>
     <ClCompile Include="..\src\audio\dsp_none.c">
+      <ExcludedFromBuild>true</ExcludedFromBuild>
+      <ObjectFileName>$(IntDir)src\audio\</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\audio\dsp_oss.c">
+      <ExcludedFromBuild>true</ExcludedFromBuild>
+      <ObjectFileName>$(IntDir)src\audio\</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\audio\dsp_pulse.c">
       <ExcludedFromBuild>true</ExcludedFromBuild>
       <ObjectFileName>$(IntDir)src\audio\</ObjectFileName>
     </ClCompile>
@@ -201,6 +213,14 @@
     </ClCompile>
     <ClInclude Include="..\src\audio\midi.h" />
     <ClCompile Include="..\src\audio\midi_alsa.c">
+      <ExcludedFromBuild>true</ExcludedFromBuild>
+      <ObjectFileName>$(IntDir)src\audio\</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\audio\midi_atari.c">
+      <ExcludedFromBuild>true</ExcludedFromBuild>
+      <ObjectFileName>$(IntDir)src\audio\</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\audio\midi_munt.c">
       <ExcludedFromBuild>true</ExcludedFromBuild>
       <ObjectFileName>$(IntDir)src\audio\</ObjectFileName>
     </ClCompile>
@@ -292,6 +312,10 @@
       <ObjectFileName>$(IntDir)src\os\</ObjectFileName>
     </ClCompile>
     <ClInclude Include="..\src\os\error.h" />
+    <ClCompile Include="..\src\os\error_osx.c">
+      <ExcludedFromBuild>true</ExcludedFromBuild>
+      <ObjectFileName>$(IntDir)src\os\</ObjectFileName>
+    </ClCompile>
     <ClCompile Include="..\src\os\error_win32.c">
       <ObjectFileName>$(IntDir)src\os\</ObjectFileName>
     </ClCompile>
@@ -302,6 +326,10 @@
       <ObjectFileName>$(IntDir)src\os\</ObjectFileName>
     </ClCompile>
     <ClInclude Include="..\src\os\readdir.h" />
+    <ClCompile Include="..\src\os\readdir_atari.c">
+      <ExcludedFromBuild>true</ExcludedFromBuild>
+      <ObjectFileName>$(IntDir)src\os\</ObjectFileName>
+    </ClCompile>
     <ClCompile Include="..\src\os\readdir_win32.c">
       <ObjectFileName>$(IntDir)src\os\</ObjectFileName>
     </ClCompile>
@@ -429,20 +457,32 @@
       <ObjectFileName>$(IntDir)src\table\</ObjectFileName>
     </ClCompile>
     <ClCompile Include="..\src\video\hq2x.c">
+      <ExcludedFromBuild>true</ExcludedFromBuild>
+      <ObjectFileName>$(IntDir)src\video\</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\video\hq2x_8b.c">
       <ObjectFileName>$(IntDir)src\video\</ObjectFileName>
     </ClCompile>
     <ClCompile Include="..\src\video\hq3x.c">
+      <ExcludedFromBuild>true</ExcludedFromBuild>
+      <ObjectFileName>$(IntDir)src\video\</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\video\hq3x_8b.c">
       <ObjectFileName>$(IntDir)src\video\</ObjectFileName>
     </ClCompile>
     <ClCompile Include="..\src\video\hq4x.c">
+      <ExcludedFromBuild>true</ExcludedFromBuild>
+      <ObjectFileName>$(IntDir)src\video\</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\video\hq4x_8b.c">
       <ObjectFileName>$(IntDir)src\video\</ObjectFileName>
     </ClCompile>
     <ClCompile Include="..\src\video\hqx.c">
       <ExcludedFromBuild>true</ExcludedFromBuild>
       <ObjectFileName>$(IntDir)src\video\</ObjectFileName>
     </ClCompile>
-    <ClInclude Include="..\src\video\hqx.h"/>
-    <ClInclude Include="..\src\video\hqx_common.h"/>
+    <ClInclude Include="..\src\video\hqx.h" />
+    <ClInclude Include="..\src\video\hqx_common.h" />
     <ClCompile Include="..\src\video\hqx_init.c">
       <ObjectFileName>$(IntDir)src\video\</ObjectFileName>
     </ClCompile>
@@ -459,7 +499,19 @@
     </ClCompile>
     <ClInclude Include="..\src\video\scalebit.h" />
     <ClInclude Include="..\src\video\video.h" />
+    <ClCompile Include="..\src\video\video_atari.c">
+      <ExcludedFromBuild>true</ExcludedFromBuild>
+      <ObjectFileName>$(IntDir)src\video\</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\video\video_fps.c">
+      <ObjectFileName>$(IntDir)src\video\</ObjectFileName>
+    </ClCompile>
+    <ClInclude Include="..\src\video\video_fps.h" />
     <ClCompile Include="..\src\video\video_sdl.c">
+      <ExcludedFromBuild>true</ExcludedFromBuild>
+      <ObjectFileName>$(IntDir)src\video\</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\video\video_sdl2.c">
       <ExcludedFromBuild>true</ExcludedFromBuild>
       <ObjectFileName>$(IntDir)src\video\</ObjectFileName>
     </ClCompile>
@@ -469,6 +521,9 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="..\source.list" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="..\os\win32\opendune.rc" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

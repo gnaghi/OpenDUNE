@@ -5,6 +5,7 @@
 #include "types.h"
 #include "../os/common.h"
 #include "../os/sleep.h"
+#include "../os/error.h"
 
 #include "input.h"
 
@@ -187,21 +188,24 @@ static uint16 Input_ReadHistory(uint16 index)
 {
 	uint16 value;
 
-	value = g_var_7013 = (g_mouseMode == INPUT_MOUSE_MODE_PLAY) ? g_var_7013 : s_history[index / 2];
+	if (g_mouseMode != INPUT_MOUSE_MODE_PLAY) g_mouseInputValue = s_history[index / 2];
+	value = g_mouseInputValue;
 	index = (index + 2) & 0xFF;
 
 	if ((value & 0xFF) >= 0x41) {
 		if ((value & 0xFF) <= 0x42) {
-			g_mouseClickX = g_var_7017 = (g_mouseMode == INPUT_MOUSE_MODE_PLAY) ? g_var_7017 : s_history[index / 2];
+			if (g_mouseMode != INPUT_MOUSE_MODE_PLAY) g_mouseRecordedX = s_history[index / 2];
+			g_mouseClickX = g_mouseRecordedX;
 			index = (index + 2) & 0xFF;
 
-			g_mouseClickY = g_var_7019 = (g_mouseMode == INPUT_MOUSE_MODE_PLAY) ? g_var_7019 : s_history[index / 2];
+			if (g_mouseMode != INPUT_MOUSE_MODE_PLAY) g_mouseRecordedY = s_history[index / 2];
+			g_mouseClickY = g_mouseRecordedY;
 			index = (index + 2) & 0xFF;
 		} else if ((value & 0xFF) <= 0x44) {
-			g_var_7017 = (g_mouseMode == INPUT_MOUSE_MODE_PLAY) ? g_var_7017 : s_history[index / 2];
+			if (g_mouseMode != INPUT_MOUSE_MODE_PLAY) g_mouseRecordedX = s_history[index / 2];
 			index = (index + 2) & 0xFF;
 
-			g_var_7019 = (g_mouseMode == INPUT_MOUSE_MODE_PLAY) ? g_var_7019 : s_history[index / 2];
+			if (g_mouseMode != INPUT_MOUSE_MODE_PLAY) g_mouseRecordedY = s_history[index / 2];
 			index = (index + 2) & 0xFF;
 		}
 	}
@@ -234,10 +238,14 @@ static void Input_ReadInputFromFile(void)
 
 	if (g_mouseMode == INPUT_MOUSE_MODE_NORMAL || g_mouseMode != INPUT_MOUSE_MODE_PLAY) return;
 
-	File_Read(g_mouseFileID, mouseBuffer, 4); /* Read failure not translated. */
+	if (File_Read(g_mouseFileID, mouseBuffer, 4) != 4) {
+		Warning("Input_ReadInputFromFile(): File_Read() error.\n");
+		return;
+	}
+	Debug("  time=%hu value=0x%04hx\n", mouseBuffer[1], mouseBuffer[0]);
 
-	g_var_7015 = mouseBuffer[1];
-	value = g_var_7013 = mouseBuffer[0];
+	g_mouseRecordedTimer = mouseBuffer[1];
+	value = g_mouseInputValue = mouseBuffer[0];
 
 	if ((value & 0xFF) != 0x2D) {
 		uint8 idx, bit;
@@ -260,10 +268,14 @@ static void Input_ReadInputFromFile(void)
 		}
 	}
 
-	File_Read(g_mouseFileID, mouseBuffer, 4); /* Read failure not translated. */
+	if (File_Read(g_mouseFileID, mouseBuffer, 4) != 4) {
+		Warning("Input_ReadInputFromFile(): File_Read() error.\n");
+		return;
+	}
+	Debug("  mouseX=%hu mouseY=%hu\n", mouseBuffer[0], mouseBuffer[1]);
 
-	g_mouseX = g_var_7017 = mouseBuffer[0];
-	value = g_mouseY = g_var_7019 = mouseBuffer[1];
+	g_mouseX = g_mouseRecordedX = mouseBuffer[0];
+	value = g_mouseY = g_mouseRecordedY = mouseBuffer[1];
 
 	Mouse_HandleMovementIfMoved(value);
 	g_timerInput = 0;
@@ -278,15 +290,15 @@ static uint16 Input_AddHistory(uint16 value)
 {
 	if (g_mouseMode == INPUT_MOUSE_MODE_NORMAL || g_mouseMode == INPUT_MOUSE_MODE_RECORD) return value;
 
-	if (g_var_701B) {
+	if (g_mouseNoRecordedValue) {
 		value = 0;
-	} else if (g_timerInput < g_var_7015) {
+	} else if (g_timerInput < g_mouseRecordedTimer) {
 		value = 0;
-	} else if (g_var_7013 == 0x2D) {
+	} else if (g_mouseInputValue == 0x2D) {	/* 0x2D == '-' */
 		Input_ReadInputFromFile();
 		value = 0;
 	} else {
-		value = g_var_7013;
+		value = g_mouseInputValue;
 	}
 
 	s_history[s_historyHead / 2] = value;
@@ -308,7 +320,7 @@ void Input_HandleInput(uint16 input)
 
 	uint16 inputMouseX;
 	uint16 inputMouseY;
-	uint16 tempBuffer[2];
+	uint16 tempBuffer[4];
 	uint16 flags; /* Mask for allowed input types. See InputFlagsEnum. */
 
 	flags       = g_inputFlags;
@@ -401,18 +413,17 @@ void Input_HandleInput(uint16 input)
 
 	value = input & 0xFF;
 	if (value == 0x2D || value == 0x41 || value == 0x42) {
-
-		if (Input_History_Add(inputMouseX) != 0) {
+		/* mouse buttons : 0x2D '-' : no change
+		                   0x41 'A' : change for 1st button
+						   0x42 'B' : change for 2nd button */
+		if ((Input_History_Add(inputMouseX) != 0) || (Input_History_Add(inputMouseY) != 0)) {
 			s_historyTail = oldTail;
 			return;
 		}
-		saveSize += 2;
 
-		if (Input_History_Add(inputMouseY) != 0) {
-			s_historyTail = oldTail;
-			return;
-		}
-		saveSize += 2;
+		tempBuffer[2] = inputMouseX;
+		tempBuffer[3] = inputMouseY;
+		saveSize += 4;
 	}
 
 	bit_value = 1;

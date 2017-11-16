@@ -423,13 +423,13 @@ static void GUI_Widget_Undraw(Widget *w, uint8 colour)
 	width = w->width;
 	height = w->height;
 
-	if (g_screenActiveID == SCREEN_0) {
+	if (GFX_Screen_IsActive(SCREEN_0)) {
 		GUI_Mouse_Hide_InRegion(offsetX, offsetY, offsetX + width, offsetY + height);
 	}
 
 	GUI_DrawFilledRectangle(offsetX, offsetY, offsetX + width, offsetY + height, colour);
 
-	if (g_screenActiveID == SCREEN_0) {
+	if (GFX_Screen_IsActive(SCREEN_0)) {
 		GUI_Mouse_Show_InRegion();
 	}
 }
@@ -628,15 +628,15 @@ static void GUI_Widget_GameControls_Click(Widget *w)
 	GUI_Window_RestoreScreen(desc);
 }
 
+/* shade everything except colors 231 to 238 */
 static void ShadeScreen(void)
 {
 	uint16 i;
 
 	memmove(g_palette_998A, g_palette1, 256 * 3);
 
-	for (i = 0; i < 256 * 3; i++) g_palette1[i] = g_palette1[i] / 2;
-
-	for (i = 0; i < 8; i++) memmove(g_palette1 + ((231 + i) * 3), &g_palette_998A[(231 + i) * 3], 3);
+	for (i = 0; i < 231 * 3; i++) g_palette1[i] = g_palette1[i] / 2;
+	for (i = 239 * 3; i < 256 * 3; i++) g_palette1[i] = g_palette1[i] / 2;
 
 	GFX_SetPalette(g_palette_998A);
 }
@@ -831,9 +831,8 @@ static void FillSavegameDesc(bool save)
 
 		filename = GenerateSavegameFilename(s_savegameIndexBase - i);
 
-		if (!File_Exists_Personal(filename)) continue;
-
 		fileId = ChunkFile_Open_Personal(filename);
+		if (fileId == FILE_INVALID) continue;
 		ChunkFile_Read(fileId, HTOBE32(CC_NAME), desc, 50);
 		ChunkFile_Close(fileId);
 		continue;
@@ -844,16 +843,15 @@ static void FillSavegameDesc(bool save)
 /**
  * Handles Click event for savegame button.
  *
- * @param key The index of the clicked button.
+ * @param index The index of the clicked button.
  * @return True if a game has been saved, False otherwise.
  */
-static bool GUI_Widget_Savegame_Click(uint16 key)
+static bool GUI_Widget_Savegame_Click(uint16 index)
 {
 	WindowDesc *desc = &g_savegameNameWindowDesc;
 	bool loop;
-	char *saveDesc = g_savegameDesc[key];
-	uint16 loc08;
-	uint16 loc0A;
+	char *saveDesc = g_savegameDesc[index];
+	bool widgetPaint;
 	bool ret;
 
 	if (*saveDesc == '[') *saveDesc = 0;
@@ -863,9 +861,9 @@ static bool GUI_Widget_Savegame_Click(uint16 key)
 	GUI_Window_Create(desc);
 
 	ret = false;
-	loc08 = 1;
+	widgetPaint = true;
 
-	if (*saveDesc == '[') key = s_savegameCountOnDisk;
+	if (*saveDesc == '[') index = s_savegameCountOnDisk;
 
 	GFX_Screen_SetActive(SCREEN_0);
 
@@ -876,27 +874,28 @@ static bool GUI_Widget_Savegame_Click(uint16 key)
 	GUI_Mouse_Show_Safe();
 
 	for (loop = true; loop; sleepIdle()) {
+		uint16 eventKey;
 		Widget *w = g_widgetLinkedListTail;
 
 		GUI_DrawText_Wrapper(NULL, 0, 0, 232, 235, 0x22);
 
-		loc0A = GUI_EditBox(saveDesc, 50, 15, g_widgetLinkedListTail, NULL, loc08);
-		loc08 = 2;
+		eventKey = GUI_EditBox(saveDesc, 50, 15, g_widgetLinkedListTail, NULL, widgetPaint);
+		widgetPaint = false;
 
-		if ((loc0A & 0x8000) == 0) continue;
+		if ((eventKey & 0x8000) == 0) continue;
 
-		GUI_Widget_MakeNormal(GUI_Widget_Get_ByIndex(w, loc0A & 0x7FFF), false);
+		GUI_Widget_MakeNormal(GUI_Widget_Get_ByIndex(w, eventKey & 0x7FFF), false);
 
-		switch (loc0A & 0x7FFF) {
-			case 0x1E:
+		switch (eventKey & 0x7FFF) {
+			case 0x1E:	/* RETURN / Save Button */
 				if (*saveDesc == 0) break;
 
-				SaveFile(GenerateSavegameFilename(s_savegameIndexBase - key), saveDesc);
+				SaveGame_SaveFile(GenerateSavegameFilename(s_savegameIndexBase - index), saveDesc);
 				loop = false;
 				ret = true;
 				break;
 
-			case 0x1F:
+			case 0x1F:	/* ESCAPE / Cancel Button */
 				loop = false;
 				ret = false;
 				FillSavegameDesc(true);
@@ -1001,8 +1000,7 @@ bool GUI_Widget_SaveLoad_Click(bool save)
 					key -= 0x1E;
 
 					if (!save) {
-						LoadFile(GenerateSavegameFilename(s_savegameIndexBase - key));
-						return true;
+						return SaveGame_LoadFile(GenerateSavegameFilename(s_savegameIndexBase - key));
 					}
 
 					if (GUI_Widget_Savegame_Click(key)) return true;
@@ -1184,7 +1182,7 @@ static void GUI_FactoryWindow_FailScrollList(int16 step)
  */
 bool GUI_Production_Down_Click(Widget *w)
 {
-	bool locdi = false;
+	bool drawDetails = false;
 
 	if (g_factoryWindowSelected < 3 && (g_factoryWindowSelected + 1) < g_factoryWindowTotal) {
 		g_timerTimeout = 10;
@@ -1193,19 +1191,17 @@ bool GUI_Production_Down_Click(Widget *w)
 
 		GUI_FactoryWindow_UpdateSelection(true);
 
-		locdi = true;
+		drawDetails = true;
 	} else {
 		if (g_factoryWindowBase + 4 < g_factoryWindowTotal) {
 			g_timerTimeout = 10;
 			g_factoryWindowBase++;
-			locdi = true;
+			drawDetails = true;
 
 			GUI_FactoryWindow_ScrollList(1);
 
 			GUI_FactoryWindow_UpdateSelection(true);
 		} else {
-			locdi = false;
-
 			GUI_FactoryWindow_DrawDetails();
 
 			GUI_FactoryWindow_FailScrollList(1);
@@ -1216,7 +1212,7 @@ bool GUI_Production_Down_Click(Widget *w)
 		GUI_FactoryWindow_UpdateSelection(false);
 	}
 
-	if (locdi) GUI_FactoryWindow_DrawDetails();
+	if (drawDetails) GUI_FactoryWindow_DrawDetails();
 
 	GUI_Widget_MakeNormal(w, false);
 
@@ -1230,7 +1226,7 @@ bool GUI_Production_Down_Click(Widget *w)
  */
 bool GUI_Production_Up_Click(Widget *w)
 {
-	bool locdi = false;
+	bool drawDetails = false;
 
 	if (g_factoryWindowSelected != 0) {
 		g_timerTimeout = 10;
@@ -1239,19 +1235,17 @@ bool GUI_Production_Up_Click(Widget *w)
 
 		GUI_FactoryWindow_UpdateSelection(true);
 
-		locdi = true;
+		drawDetails = true;
 	} else {
 		if (g_factoryWindowBase != 0) {
 			g_timerTimeout = 10;
 			g_factoryWindowBase--;
-			locdi = true;
+			drawDetails = true;
 
 			GUI_FactoryWindow_ScrollList(-1);
 
 			GUI_FactoryWindow_UpdateSelection(true);
 		} else {
-			locdi = false;
-
 			GUI_FactoryWindow_DrawDetails();
 
 			GUI_FactoryWindow_FailScrollList(-1);
@@ -1262,7 +1256,7 @@ bool GUI_Production_Up_Click(Widget *w)
 		GUI_FactoryWindow_UpdateSelection(false);
 	}
 
-	if (locdi) GUI_FactoryWindow_DrawDetails();
+	if (drawDetails) GUI_FactoryWindow_DrawDetails();
 
 	GUI_Widget_MakeNormal(w, false);
 

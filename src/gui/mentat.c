@@ -8,6 +8,7 @@
 #include "../os/endian.h"
 #include "../os/sleep.h"
 #include "../os/strings.h"
+#include "../os/error.h"
 
 #include "mentat.h"
 
@@ -33,8 +34,10 @@
 
 /**
  * Information about the mentat.
+ *
+ * eyeX, eyeY, mouthX, mouthY, otherX, otherY, shoulderX, shoulderY
  */
-static const uint8 s_unknownHouseData[6][8] = {
+static const uint8 s_mentatSpritePositions[6][8] = {
 	{0x20,0x58,0x20,0x68,0x00,0x00,0x80,0x68}, /* Harkonnen mentat. */
 	{0x28,0x50,0x28,0x60,0x48,0x98,0x80,0x80}, /* Atreides mentat. */
 	{0x10,0x50,0x10,0x60,0x58,0x90,0x80,0x80}, /* Ordos mentat. */
@@ -84,7 +87,10 @@ static void GUI_Mentat_ShowDialog(uint8 houseID, uint16 stringID, const char *ws
 {
 	Widget *w1, *w2;
 
-	if (g_debugSkipDialogs) return;
+	if (g_debugSkipDialogs) {
+		Debug("Skipping Mentat dialog...\n");
+		return;
+	}
 
 	w1 = GUI_Widget_Allocate(1, GUI_Widget_GetShortcut(String_Get_ByIndex(STR_PROCEED)[0]), 168, 168, 379, 0);
 	w2 = GUI_Widget_Allocate(2, GUI_Widget_GetShortcut(String_Get_ByIndex(STR_REPEAT)[0]), 240, 168, 381, 0);
@@ -102,7 +108,7 @@ static void GUI_Mentat_ShowDialog(uint8 houseID, uint16 stringID, const char *ws
 	do {
 		strncpy(g_readBuffer, String_Get_ByIndex(stringID), g_readBufferSize);
 		sleepIdle();
-	} while (GUI_Mentat_Show(g_readBuffer, wsaFilename, w1, true) == 0x8002);
+	} while (GUI_Mentat_Show(g_readBuffer, wsaFilename, w1) == 0x8002);
 
 	free(w2);
 	free(w1);
@@ -394,10 +400,9 @@ bool GUI_Widget_Mentat_Click(Widget *w)
  * @param spriteBuffer The buffer of the strings.
  * @param wsaFilename The WSA to show.
  * @param w The widgets to handle. Can be NULL for no widgets.
- * @param unknown A boolean.
  * @return Return value of GUI_Widget_HandleEvents() or f__B4DA_0AB8_002A_AAB2() (latter when no widgets).
  */
-uint16 GUI_Mentat_Show(char *stringBuffer, const char *wsaFilename, Widget *w, bool unknown)
+uint16 GUI_Mentat_Show(char *stringBuffer, const char *wsaFilename, Widget *w)
 {
 	uint16 ret;
 
@@ -442,7 +447,8 @@ uint16 GUI_Mentat_Show(char *stringBuffer, const char *wsaFilename, Widget *w, b
 
 	Input_History_Clear();
 
-	if (unknown) {
+	if (w != NULL) {
+		/* reset palette and tiles */
 		Load_Palette_Mercenaries();
 		Sprites_LoadTiles();
 	}
@@ -496,8 +502,8 @@ void GUI_Mentat_Display(const char *wsaFilename, uint8 houseID)
 
 	memset(s_mentatSprites, 0, sizeof(s_mentatSprites));
 
-	s_eyesLeft = s_eyesRight  = s_unknownHouseData[houseID][0];
-	s_eyesTop  = s_eyesBottom = s_unknownHouseData[houseID][1];
+	s_eyesLeft = s_eyesRight  = s_mentatSpritePositions[houseID][0];
+	s_eyesTop  = s_eyesBottom = s_mentatSpritePositions[houseID][1];
 
 	for (i = 0; i < 5; i++) {
 		s_mentatSprites[0][i] = g_sprites[387 + houseID * 15 + i];
@@ -506,8 +512,8 @@ void GUI_Mentat_Display(const char *wsaFilename, uint8 houseID)
 	s_eyesRight  += Sprite_GetWidth(s_mentatSprites[0][0]);
 	s_eyesBottom += Sprite_GetHeight(s_mentatSprites[0][0]);
 
-	s_mouthLeft = s_mouthRight  = s_unknownHouseData[houseID][2];
-	s_mouthTop  = s_mouthBottom = s_unknownHouseData[houseID][3];
+	s_mouthLeft = s_mouthRight  = s_mentatSpritePositions[houseID][2];
+	s_mouthTop  = s_mouthBottom = s_mentatSpritePositions[houseID][3];
 
 	for (i = 0; i < 5; i++) {
 		s_mentatSprites[1][i] = g_sprites[392 + houseID * 15 + i];
@@ -516,15 +522,15 @@ void GUI_Mentat_Display(const char *wsaFilename, uint8 houseID)
 	s_mouthRight  += Sprite_GetWidth(s_mentatSprites[1][0]);
 	s_mouthBottom += Sprite_GetHeight(s_mentatSprites[1][0]);
 
-	s_otherLeft = s_unknownHouseData[houseID][4];
-	s_otherTop  = s_unknownHouseData[houseID][5];
+	s_otherLeft = s_mentatSpritePositions[houseID][4];
+	s_otherTop  = s_mentatSpritePositions[houseID][5];
 
 	for (i = 0; i < 4; i++) {
 		s_mentatSprites[2][i] = g_sprites[398 + houseID * 15 + i];
 	}
 
-	g_shoulderLeft = s_unknownHouseData[houseID][6];
-	g_shoulderTop  = s_unknownHouseData[houseID][7];
+	g_shoulderLeft = s_mentatSpritePositions[houseID][6];
+	g_shoulderTop  = s_mentatSpritePositions[houseID][7];
 
 	Widget_SetAndPaintCurrentWidget(8);
 
@@ -883,13 +889,13 @@ void GUI_Mentat_Create_HelpScreen_Widgets(void)
 
 	g_widgetMentatTail = GUI_Widget_Link(g_widgetMentatTail, g_widgetMentatScrollbar);
 
-	g_widgetMentatScrollDown = GUI_Widget_Allocate3(16, 0, 168, 96, g_sprites[385], g_sprites[386], GUI_Widget_Get_ByIndex(g_widgetMentatTail, 15), 1);
+	g_widgetMentatScrollDown = GUI_Widget_AllocateScrollBtn(16, 0, 168, 96, g_sprites[385], g_sprites[386], GUI_Widget_Get_ByIndex(g_widgetMentatTail, 15), true);
 	g_widgetMentatScrollDown->shortcut  = 0;
 	g_widgetMentatScrollDown->shortcut2 = 0;
 	g_widgetMentatScrollDown->parentID  = 8;
 	g_widgetMentatTail = GUI_Widget_Link(g_widgetMentatTail, g_widgetMentatScrollDown);
 
-	g_widgetMentatScrollUp = GUI_Widget_Allocate3(17, 0, 168, 16, g_sprites[383], g_sprites[384], GUI_Widget_Get_ByIndex(g_widgetMentatTail, 15), 0);
+	g_widgetMentatScrollUp = GUI_Widget_AllocateScrollBtn(17, 0, 168, 16, g_sprites[383], g_sprites[384], GUI_Widget_Get_ByIndex(g_widgetMentatTail, 15), false);
 	g_widgetMentatScrollUp->shortcut  = 0;
 	g_widgetMentatScrollUp->shortcut2 = 0;
 	g_widgetMentatScrollUp->parentID  = 8;
@@ -915,13 +921,13 @@ static void GUI_Mentat_ShowHelp(void)
 	char *desc;
 	char *picture;
 	char *text;
-	bool loc12;
+	bool loopAnimation;
 
 	subject = s_helpSubjects;
 
 	for (i = 0; i < s_selectedHelpSubject; i++) subject = String_NextString(subject);
 
-	noDesc = (subject[5] == '0');
+	noDesc = (subject[5] == '0');	/* or no WSA file ? */
 	offset = HTOBE32(*(uint32 *)(subject + 1));
 
 	fileID = ChunkFile_Open(s_mentatFilename);
@@ -940,9 +946,10 @@ static void GUI_Mentat_ShowHelp(void)
 	String_TranslateSpecial(text, text);
 	File_Close(fileID);
 
+	/* skip WSA file name (or string index) */
 	while (*text != '*' && *text != '?') text++;
 
-	loc12 = (*text == '*');
+	loopAnimation = (*text == '*') ? true : false;
 
 	*text++ = '\0';
 
@@ -964,7 +971,7 @@ static void GUI_Mentat_ShowHelp(void)
 		if (*text != '\0') *text++ = '\0';
 	}
 
-	GUI_Mentat_Loop(picture, desc, text, loc12 ? 1 : 0, g_widgetMentatFirst);
+	GUI_Mentat_Loop(picture, desc, text, loopAnimation, g_widgetMentatFirst);
 
 	GUI_Widget_MakeNormal(g_widgetMentatFirst, false);
 
@@ -1053,10 +1060,10 @@ static bool GUI_Mentat_DrawInfo(char *text, uint16 left, uint16 top, uint16 heig
 	return true;
 }
 
-uint16 GUI_Mentat_Loop(const char *wsaFilename, char *pictureDetails, char *text, bool arg12, Widget *w)
+uint16 GUI_Mentat_Loop(const char *wsaFilename, char *pictureDetails, char *text, bool loopAnimation, Widget *w)
 {
 	Screen oldScreenID;
-	uint16 old07AE;
+	uint16 oldWidgetID;
 	void *wsa;
 	uint16 descLines;
 	bool dirty;
@@ -1076,7 +1083,7 @@ uint16 GUI_Mentat_Loop(const char *wsaFilename, char *pictureDetails, char *text
 	textTick = 0;
 	textDelay = 0;
 
-	old07AE = Widget_SetCurrentWidget(8);
+	oldWidgetID = Widget_SetCurrentWidget(8);
 	oldScreenID = GFX_Screen_SetActive(SCREEN_2);
 
 	wsa = NULL;
@@ -1234,7 +1241,7 @@ uint16 GUI_Mentat_Loop(const char *wsaFilename, char *pictureDetails, char *text
 				if (!WSA_DisplayFrame(wsa, frame++, g_curWidgetXBase << 3, g_curWidgetYBase, SCREEN_2)) {
 					if (step == 0) step = 1;
 
-					if (arg12 != 0) {
+					if (loopAnimation) {
 						frame = 0;
 					} else {
 						WSA_Unload(wsa);
@@ -1263,7 +1270,7 @@ uint16 GUI_Mentat_Loop(const char *wsaFilename, char *pictureDetails, char *text
 	GUI_Mouse_Hide_InWidget(g_curWidgetIndex);
 	GUI_Screen_Copy(g_curWidgetXBase, g_curWidgetYBase, g_curWidgetXBase, g_curWidgetYBase, g_curWidgetWidth, g_curWidgetHeight, SCREEN_2, SCREEN_0);
 	GUI_Mouse_Show_InWidget();
-	Widget_SetCurrentWidget(old07AE);
+	Widget_SetCurrentWidget(oldWidgetID);
 	GFX_Screen_SetActive(oldScreenID);
 
 	Input_History_Clear();

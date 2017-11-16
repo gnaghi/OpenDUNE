@@ -1,6 +1,9 @@
 /** @file src/video/video_sdl.c SDL video driver. */
 
 #include <SDL.h>
+#ifndef WITHOUT_SDLIMAGE
+#include <SDL_image.h>
+#endif /* WITHOUT_SDLIMAGE */
 #if defined(__ALTIVEC__)
 #include <altivec.h>
 #endif /* __ALTIVEC__ */
@@ -23,9 +26,18 @@
 #include "../input/input.h"
 #include "../input/mouse.h"
 #include "../opendune.h"
+#include "../inifile.h"
 
+#include "video_fps.h"
 #include "scalebit.h"
 #include "hqx.h"
+
+/* Set DUNE_ICON_DIR at compile time.  e.g. */
+/* #define DUNE_ICON_DIR "/usr/local/share/icons/hicolor/32x32/apps/" */
+
+#ifndef DUNE_ICON_DIR
+#define DUNE_ICON_DIR "./"
+#endif
 
 static VideoScaleFilter s_scale_filter;
 
@@ -54,6 +66,7 @@ static uint16 s_mouseMinY = 0;
 static uint16 s_mouseMaxY = 0;
 
 static uint8 s_gfx_screen8[SCREEN_WIDTH * SCREEN_HEIGHT];
+static uint16 s_screenOffset = 0;
 
 /* translation from SDLKey (symbolic codes) to AT (or XT ?) keyboard scancodes
  * Dune 2 input code handle extended scancodes (prefixed with e0, we could generate them also) */
@@ -224,11 +237,19 @@ void Video_Mouse_SetRegion(uint16 minX, uint16 maxX, uint16 minY, uint16 maxY)
  */
 bool Video_Init(int screen_magnification, VideoScaleFilter filter)
 {
+	uint32 video_flags;
+	int bpp;
+#ifndef WITHOUT_SDLIMAGE
+	SDL_Surface * icon;
+#endif /* WITHOUT_SDLIMAGE */
+
 	if (s_video_initialized) return true;
 	if (screen_magnification <= 0 || screen_magnification > 4) {
 		Error("Incorrect screen magnification factor : %d\n", screen_magnification);
 		return false;
 	}
+	/* no filter if scale factor is 1 */
+	if (screen_magnification == 1) filter = FILTER_NEAREST_NEIGHBOR;
 	s_scale_filter = filter;
 	s_screen_magnification = screen_magnification;
 	if (filter == FILTER_HQX) {
@@ -240,12 +261,28 @@ bool Video_Init(int screen_magnification, VideoScaleFilter filter)
 		return false;
 	}
 
-	SDL_WM_SetCaption(window_caption, "");
-	if (filter == FILTER_HQX) {
-		s_gfx_surface = SDL_SetVideoMode(SCREEN_WIDTH * s_screen_magnification, SCREEN_HEIGHT * s_screen_magnification, 32, SDL_SWSURFACE);
-	} else {
-		s_gfx_surface = SDL_SetVideoMode(SCREEN_WIDTH * s_screen_magnification, SCREEN_HEIGHT * s_screen_magnification, 8, SDL_SWSURFACE | SDL_HWPALETTE);
+#ifndef WITHOUT_SDLIMAGE
+	icon = IMG_Load(DUNE_ICON_DIR "opendune.png");
+	if (icon == NULL) icon = IMG_Load("../os/png_icon/opendune_32x32.png");
+	if (icon != NULL) {
+		SDL_WM_SetIcon(icon, NULL);
+		SDL_FreeSurface(icon);
 	}
+#endif /* WITHOUT_SDLIMAGE */
+
+	SDL_WM_SetCaption(window_caption, "OpenDUNE");
+
+	video_flags = SDL_HWSURFACE | SDL_HWACCEL;
+	if (IniFile_GetInteger("fullscreen", 0) != 0) {
+		video_flags |= SDL_FULLSCREEN;
+	}
+	if (filter == FILTER_HQX) {
+		bpp = 32;
+	} else {
+		bpp = 8;
+		video_flags |= SDL_HWPALETTE;
+	}
+	s_gfx_surface = SDL_SetVideoMode(SCREEN_WIDTH * s_screen_magnification, SCREEN_HEIGHT * s_screen_magnification, bpp, video_flags);
 	if (s_gfx_surface == NULL) {
 		Error("Could not set resolution: %s\n", SDL_GetError());
 		return false;
@@ -276,32 +313,29 @@ void Video_Uninit(void)
 static void Video_DrawScreen_Scale2x(void)
 {
 	uint8 *data = GFX_Screen_Get_ByIndex(SCREEN_0);
+	data += (s_screenOffset << 2);
 	scale(s_screen_magnification, s_gfx_surface->pixels, s_screen_magnification * SCREEN_WIDTH, data, SCREEN_WIDTH, 1, SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
 static void Video_DrawScreen_Hqx(void)
 {
-	static uint32 rgb_screen[SCREEN_WIDTH*SCREEN_HEIGHT];
 	uint8 *p;
-	uint32 *rgb;
-	int i;
 
-	i = SCREEN_WIDTH*SCREEN_HEIGHT;
 	p = GFX_Screen_Get_ByIndex(SCREEN_0);
-	rgb = rgb_screen;
-	do {
-		*rgb++ = rgb_palette[*p++];
-	} while(--i > 0);
+	p += (s_screenOffset << 2);
 
 	switch(s_screen_magnification) {
 	case 2:
-		hq2x_32(rgb_screen, s_gfx_surface->pixels, SCREEN_WIDTH, SCREEN_HEIGHT);
+		hq2x_8to32(p, s_gfx_surface->pixels,
+		           SCREEN_WIDTH, SCREEN_HEIGHT, rgb_palette);
 		break;
 	case 3:
-		hq3x_32(rgb_screen, s_gfx_surface->pixels, SCREEN_WIDTH, SCREEN_HEIGHT);
+		hq3x_8to32(p, s_gfx_surface->pixels,
+		           SCREEN_WIDTH, SCREEN_HEIGHT, rgb_palette);
 		break;
 	case 4:
-		hq4x_32(rgb_screen, s_gfx_surface->pixels, SCREEN_WIDTH, SCREEN_HEIGHT);
+		hq4x_8to32(p, s_gfx_surface->pixels,
+		           SCREEN_WIDTH, SCREEN_HEIGHT, rgb_palette);
 		break;
 	}
 }
@@ -315,10 +349,20 @@ static void Video_DrawScreen_Nearest_Neighbor(void)
 	int x, y;
 	int i, j;
 
+	data += (s_screenOffset << 2);
 	switch(s_screen_magnification) {
+	case 1:
+		if (s_gfx_surface->pitch == SCREEN_WIDTH) {
+			memcpy(gfx1, data, SCREEN_WIDTH * SCREEN_HEIGHT);
+		} else for (y = 0; y < SCREEN_HEIGHT; y++) {
+			memcpy(gfx1, data, SCREEN_WIDTH);
+			data += SCREEN_WIDTH;
+			gfx1 += s_gfx_surface->pitch;
+		}
+		break;
 	case 2:
 		for (y = 0; y < SCREEN_HEIGHT; y++) {
-			gfx2 = gfx1 + SCREEN_WIDTH * 2;
+			gfx2 = gfx1 + s_gfx_surface->pitch;
 #if defined(__x86_64__)
 			/* SSE2 code */
 			for (x = SCREEN_WIDTH / 16; x > 0; x--) {
@@ -379,8 +423,8 @@ static void Video_DrawScreen_Nearest_Neighbor(void)
 		break;
 	case 3:
 		for (y = 0; y < SCREEN_HEIGHT; y++) {
-			gfx2 = gfx1 + SCREEN_WIDTH * 3;
-			gfx3 = gfx2 + SCREEN_WIDTH * 3;
+			gfx2 = gfx1 + s_gfx_surface->pitch;
+			gfx3 = gfx2 + s_gfx_surface->pitch;
 			for (x = 0; x < SCREEN_WIDTH; x++) {
 				uint8 value = *data++;
 				*gfx1++ = value;
@@ -402,13 +446,13 @@ static void Video_DrawScreen_Nearest_Neighbor(void)
 			for (x = 0; x < SCREEN_WIDTH; x++) {
 				for (i = 0; i < s_screen_magnification; i++) {
 					for (j = 0; j < s_screen_magnification; j++) {
-						*(gfx1 + SCREEN_WIDTH * s_screen_magnification * j) = *data;
+						*(gfx1 + s_gfx_surface->pitch * j) = *data;
 					}
 					gfx1++;
 				}
 				data++;
 			}
-			gfx1 += SCREEN_WIDTH * s_screen_magnification * (s_screen_magnification - 1);
+			gfx1 += s_gfx_surface->pitch * (s_screen_magnification - 1);
 		}
 	}
 }
@@ -419,6 +463,7 @@ static void Video_DrawScreen_Nearest_Neighbor(void)
  */
 static void Video_DrawScreen(void)
 {
+	SDL_LockSurface(s_gfx_surface);
 	switch(s_scale_filter) {
 	case FILTER_NEAREST_NEIGHBOR:
 		Video_DrawScreen_Nearest_Neighbor();
@@ -432,6 +477,7 @@ static void Video_DrawScreen(void)
 	default:
 		Error("Unsupported scale filter\n");
 	}
+	SDL_UnlockSurface(s_gfx_surface);
 }
 
 /**
@@ -440,6 +486,7 @@ static void Video_DrawScreen(void)
 void Video_Tick(void)
 {
 	SDL_Event event;
+	static bool s_showFPS = false;
 
 	if (!s_video_initialized) return;
 
@@ -447,6 +494,10 @@ void Video_Tick(void)
 
 	if (s_video_lock) return;
 	s_video_lock = true;
+
+	if (s_showFPS) {
+		Video_ShowFPS(GFX_Screen_Get_ByIndex(SCREEN_0));
+	}
 
 	while (SDL_PollEvent(&event)) {
 		uint8 keyup = 1;
@@ -478,6 +529,18 @@ void Video_Tick(void)
 			{
 				uint8 scancode;	/* AT keyboard scancode */
 				SDLKey sym = event.key.keysym.sym;	/* SDLKey symbolic code */
+				if ((sym == SDLK_RETURN && (event.key.keysym.mod & KMOD_ALT)) || sym == SDLK_F11) {
+					/* ALT-ENTER or F11 was pressed */
+					if (keyup) continue; /* ignore key-up */
+					if (!SDL_WM_ToggleFullScreen(s_gfx_surface)) {
+						Warning("Failed to toggle full screen\n");
+					}
+					continue;
+				}
+				if (sym == SDLK_F8 && !keyup) {
+					s_showFPS = !s_showFPS;
+					continue;
+				}
 				/* Mac keyboard scancodes are very different from what
 				 * they are on a PC : we need a translation table. */
 #if defined(__APPLE__)
@@ -551,14 +614,26 @@ void Video_SetPalette(void *palette, int from, int length)
 		s_screen_needrepaint = true;
 	} else {
 		/* convert from 6bit to 8bit per component */
-		for (i = from; i < from + length; i++) {
+		for (i = 0; i < length; i++) {
 			paletteRGB[i].r = (((*p++) & 0x3F) * 0x41) >> 4;
 			paletteRGB[i].g = (((*p++) & 0x3F) * 0x41) >> 4;
 			paletteRGB[i].b = (((*p++) & 0x3F) * 0x41) >> 4;
 		}
 
-		SDL_SetPalette(s_gfx_surface, SDL_LOGPAL | SDL_PHYSPAL, paletteRGB, from, length);
+		if(!SDL_SetPalette(s_gfx_surface, SDL_LOGPAL | SDL_PHYSPAL, paletteRGB, from, length)) Warning("SDL_SetPalette() failed\n");
 	}
 
 	s_video_lock = false;
+}
+
+/*
+ * change the screen offset, equivalent to changing the
+ * Start Address Register on a VGA card.
+ * VGA Hardware has 4 "maps" of 64kB.
+ * @param offset The address granularity is 4bytes
+ */
+void Video_SetOffset(uint16 offset)
+{
+	s_screenOffset = offset;
+	s_screen_needrepaint = true;
 }
